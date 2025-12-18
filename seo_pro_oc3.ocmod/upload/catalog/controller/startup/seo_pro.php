@@ -315,7 +315,7 @@ class ControllerStartupSeoPro extends Controller {
 
 			$query = $this->db->query($sql);
 
-			$path[$category_id] = $query->num_rows ? $query->row['path'] : false;
+			$path[$category_id] = $query->num_rows ? $query->row['path'] : '';
 
 			$this->cache->set('category.seopath', $path);
 		}
