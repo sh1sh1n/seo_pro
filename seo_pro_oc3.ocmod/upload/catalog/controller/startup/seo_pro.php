@@ -132,6 +132,18 @@ class ControllerStartupSeoPro extends Controller {
 		$route = $data['route'];
 		unset($data['route']);
 
+		if ($route === 'common/home') {
+		    $seo_url = ($component['scheme'] === 'https')
+		        ? $this->config->get('config_ssl')
+		        : $this->config->get('config_url');
+		
+		    if ($data) {
+		        $seo_url .= '?' . urldecode(http_build_query($data, '', '&'));
+		    }
+		
+		    return $seo_url;
+		}
+
 		switch ($route) {
 			case 'product/product':
 				if (isset($data['product_id'])) {
