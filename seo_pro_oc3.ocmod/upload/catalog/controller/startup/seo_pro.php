@@ -276,7 +276,9 @@ class ControllerStartupSeoPro extends Controller {
 		static $path = null;
 		if (!isset($path)) {
 			$path = $this->cache->get('product.seopath');
-			if (!isset($path)) $path = array();
+			if (!is_array($path)) {
+			    $path = array();
+			}
 		}
 
 		if (!isset($path[$product_id])) {
@@ -297,7 +299,9 @@ class ControllerStartupSeoPro extends Controller {
 		static $path = null;
 		if (!isset($path)) {
 			$path = $this->cache->get('category.seopath');
-			if (!isset($path)) $path = array();
+			if (!is_array($path)) {
+			    $path = array();
+			}
 		}
 
 		if (!isset($path[$category_id])) {
