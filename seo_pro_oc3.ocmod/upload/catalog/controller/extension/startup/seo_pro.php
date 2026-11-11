@@ -70,7 +70,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			}
 
 			// The address as a whole is a keyword: used only when the address does not resolve part by part,
-			// so "/cat.html" is always the keyword "cat" with the postfix and never the keyword "cat.html"
+			// so "/cat.html" is the keyword "cat" with the postfix, and the keyword "cat.html" only when "cat" does not exist
 			if (count($rows) != sizeof($parts) && isset($this->cache_data['keywords'][$route])) {
 				$keyword = $route;
 				$parts = array($keyword);
