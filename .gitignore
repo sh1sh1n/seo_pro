@@ -1,0 +1,12 @@
+# Local working files: plans, review reports, tests
+*.md
+!README.md
+plan_refs/
+review_tasks/
+tests/
+
+# OpenCart 2.3 version is not maintained in this fork
+seo_pro_oc23.ocmod/
+seo_pro_oc23.ocmod.zip
+
+.DS_Store
