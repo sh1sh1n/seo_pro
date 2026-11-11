@@ -52,7 +52,8 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 			$postfix = utf8_strtolower(trim((string)$this->config->get('config_seo_url_postfix')));
 
-			if ($postfix !== '' && substr($path, -strlen($postfix)) === $postfix) {
+			// Only addresses without a trailing slash carry the postfix: a category keyword may itself end with it
+			if ($postfix !== '' && substr($route, -1) !== '/' && substr($path, -strlen($postfix)) === $postfix) {
 				$path = substr($path, 0, -strlen($postfix));
 			}
 
@@ -68,7 +69,9 @@ class ControllerExtensionStartupSeoPro extends Controller {
 				}
 			}
 
-			if (isset($this->cache_data['keywords'][$route])) {
+			// The address as a whole is a keyword: used only when the address does not resolve part by part,
+			// so "/cat.html" is always the keyword "cat" with the postfix and never the keyword "cat.html"
+			if (count($rows) != sizeof($parts) && isset($this->cache_data['keywords'][$route])) {
 				$keyword = $route;
 				$parts = array($keyword);
 				$rows = array(array('keyword' => $keyword, 'query' => $this->cache_data['keywords'][$keyword]));
@@ -112,11 +115,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			} elseif (isset($this->request->get['information_id'])) {
 				$this->request->get['route'] = 'information/information';
 			} elseif (isset($this->cache_data['queries'][$route_])) {
-				// The address is a route that has a keyword: send GET and HEAD to the keyword, let other methods reach the route
-				if ($this->isRedirectable()) {
-					$this->response->redirect($this->url->link($route_, '', $this->isHttps()), 301);
-				}
-
+				// The address is a route that has a keyword: validate() redirects it to the keyword with the current parameters
 				$this->request->get['route'] = $route_;
 			} else {
 				if (isset($queries[$parts[0]])) {
@@ -316,7 +315,10 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		}
 
 		if (!isset($path[$product_id])) {
-			$query = $this->db->query("SELECT category_id FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "' ORDER BY main_category DESC LIMIT 1");
+			// Without the column main_category the first category of the product is used
+			$order = $this->config->get('seo_pro_schema_failed') ? '' : " ORDER BY main_category DESC";
+
+			$query = $this->db->query("SELECT category_id FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "'" . $order . " LIMIT 1");
 			$path[$product_id] = $this->getPathByCategory($query->num_rows ? (int)$query->row['category_id'] : 0);
 
 			$this->cache->set('product.seopath', $path);

@@ -2,7 +2,7 @@
 <modification>
     <name>SEO Pro</name>
     <code>seo_pro</code>
-    <version>1.6.1</version>
+    <version>1.6.2</version>
     <author>eniarku fork</author>
     <link>https://github.com/eniarku/seo_pro</link>
     
@@ -18,7 +18,7 @@
             <search><![CDATA[// Set time zone]]></search>
             <add position="before"><![CDATA[
 		if ($this->config->get('seo_pro_schema_version') !== Seo_pro_schema::VERSION) {
-			(new Seo_pro_schema($this->db, $this->log, $this->cache))->install();
+			$this->config->set('seo_pro_schema_failed', !(new Seo_pro_schema($this->db, $this->log, $this->cache))->install());
 		}
             ]]></add>
         </operation>
@@ -29,7 +29,7 @@
             <search><![CDATA[// Set time zone]]></search>
             <add position="before"><![CDATA[
 		if ($this->config->get('seo_pro_schema_version') !== Seo_pro_schema::VERSION) {
-			(new Seo_pro_schema($this->db, $this->log, $this->cache))->install();
+			$this->config->set('seo_pro_schema_failed', !(new Seo_pro_schema($this->db, $this->log, $this->cache))->install());
 		}
             ]]></add>
         </operation>
@@ -206,7 +206,9 @@
     <file path="admin/model/catalog/product.php">
         <operation error="skip">
             <search><![CDATA[if (isset($data['product_related'])) {]]></search>
-            <add position="before"><![CDATA[        if(isset($data['main_category_id']) && $data['main_category_id'] > 0) {
+            <add position="before"><![CDATA[        if ($this->config->get('seo_pro_schema_failed')) {
+                        // The column main_category is not created yet
+                    } elseif(isset($data['main_category_id']) && $data['main_category_id'] > 0) {
                         $this->db->query("DELETE FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "' AND category_id = '" . (int)$data['main_category_id'] . "'");
                         $this->db->query("INSERT INTO " . DB_PREFIX . "product_to_category SET product_id = '" . (int)$product_id . "', category_id = '" . (int)$data['main_category_id'] . "', main_category = 1");
                     } elseif(isset($data['product_category'][0])) {
@@ -217,6 +219,11 @@
             <search><![CDATA[public function getProductRelated($product_id) {]]></search>
             <add position="before"><![CDATA[
                 public function getProductMainCategoryId($product_id) {
+                    // The column main_category is not created yet
+                    if ($this->config->get('seo_pro_schema_failed')) {
+                        return 0;
+                    }
+
                     $query = $this->db->query("SELECT category_id FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "' AND main_category = '1' LIMIT 1");
 
                     return ($query->num_rows ? (int)$query->row['category_id'] : 0);
@@ -226,7 +233,7 @@
         <operation error="skip">
             <search><![CDATA[$this->cache->delete('product');]]></search>
             <add position="after"><![CDATA[
-               $this->cache->delete('seo_pro');
+               Seo_pro_cache::clear($this->db, $this->cache);
             ]]></add>
         </operation>
     </file>
@@ -268,8 +275,38 @@
         <operation error="skip">
             <search><![CDATA[$this->cache->delete('category');]]></search>
             <add position="after"><![CDATA[
-               $this->cache->delete('seo_pro');
-               $this->cache->delete('product.seopath');
+               Seo_pro_cache::clear($this->db, $this->cache);
+            ]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/controller/catalog/category.php">
+        <operation error="skip">
+            <search><![CDATA[$this->model_catalog_category->repairCategories();]]></search>
+            <add position="after"><![CDATA[
+               // Repair has rebuilt category_path: the cached paths are out of date
+               Seo_pro_cache::clear($this->db, $this->cache);
+            ]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/model/design/seo_url.php">
+        <operation error="skip">
+            <search><![CDATA[$this->db->query("INSERT INTO `" . DB_PREFIX . "seo_url` SET]]></search>
+            <add position="after"><![CDATA[
+               Seo_pro_cache::clear($this->db, $this->cache);
+            ]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[$this->db->query("UPDATE `" . DB_PREFIX . "seo_url` SET]]></search>
+            <add position="after"><![CDATA[
+               Seo_pro_cache::clear($this->db, $this->cache);
+            ]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[$this->db->query("DELETE FROM `" . DB_PREFIX . "seo_url` WHERE seo_url_id]]></search>
+            <add position="after"><![CDATA[
+               Seo_pro_cache::clear($this->db, $this->cache);
             ]]></add>
         </operation>
     </file>
@@ -278,7 +315,7 @@
         <operation error="skip">
             <search><![CDATA[$this->cache->delete('manufacturer');]]></search>
             <add position="after"><![CDATA[
-               $this->cache->delete('seo_pro');
+               Seo_pro_cache::clear($this->db, $this->cache);
             ]]></add>
         </operation>
     </file>
@@ -287,7 +324,7 @@
         <operation error="skip">
             <search><![CDATA[$this->cache->delete('information');]]></search>
             <add position="after"><![CDATA[
-               $this->cache->delete('seo_pro');
+               Seo_pro_cache::clear($this->db, $this->cache);
             ]]></add>
         </operation>
     </file>
@@ -304,6 +341,21 @@ $(document).ajaxSuccess(function(event, xhr, settings) {
 });
 //--></script>]]></add>
         </operation>
-    </file> 
+    </file>
+
+    <file path="catalog/view/theme/default/template/checkout/checkout.twig">
+        <operation error="skip">
+            <ignoreif><![CDATA[checkout/cart/remove') != -1]]></ignoreif>
+            <search><![CDATA[{{ footer }}]]></search>
+            <add position="before"><![CDATA[<script type="text/javascript"><!--
+// On an SEO address common.js does not see the route: go to the cart after a removal from the mini cart, as the core does
+$(document).ajaxSuccess(function(event, xhr, settings) {
+	if (settings.url.indexOf('checkout/cart/remove') != -1) {
+		location = 'index.php?route=checkout/cart';
+	}
+});
+//--></script>]]></add>
+        </operation>
+    </file>
 
 </modification>
