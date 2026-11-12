@@ -59,67 +59,56 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 			$parts = explode('/', $path);
 
-			$rows = array();
+			// Part by part. The first part that is not a keyword ends the search: the rest of the address costs no queries
+			$queries = array();
+
 			foreach ($parts as $keyword) {
-				if (isset($this->cache_data['keywords'][$keyword])) {
-					$rows[] = array('keyword' => $keyword, 'query' => $this->cache_data['keywords'][$keyword]);
-				} elseif ($keyword != '') {
-					$query_multilang = $this->db->query("SELECT `query` FROM " . DB_PREFIX . "seo_url WHERE keyword = '" . $this->db->escape($keyword) . "' AND store_id = '" . (int)$this->config->get('config_store_id') . "' ORDER BY (language_id = '" . (int)$this->config->get('config_language_id') . "') DESC, seo_url_id LIMIT 1");
-					if ($query_multilang->row) $rows[] = array('keyword' => $keyword, 'query' => $query_multilang->row['query']);
+				$query = ($keyword === '') ? null : $this->getQueryByKeyword($keyword, true);
+
+				if ($query === null) {
+					$queries = null;
+
+					break;
 				}
+
+				$queries[] = $query;
 			}
 
 			// The address as a whole is a keyword: used only when the address does not resolve part by part,
 			// so "/cat.html" is the keyword "cat" with the postfix, and the keyword "cat.html" only when "cat" does not exist
-			if (count($rows) != sizeof($parts) && isset($this->cache_data['keywords'][$route])) {
-				$keyword = $route;
-				$parts = array($keyword);
-				$rows = array(array('keyword' => $keyword, 'query' => $this->cache_data['keywords'][$keyword]));
+			if ($queries === null) {
+				$query = $this->getQueryByKeyword($route);
+
+				if ($query !== null) {
+					$queries = array($query);
+				}
 			}
 
-			if (count($rows) == sizeof($parts)) {
-				$queries = array();
-				foreach ($rows as $row) {
-					$queries[utf8_strtolower($row['keyword'])] = $row['query'];
-				}
+			$page = ($queries === null) ? null : $this->resolveQueries($queries);
 
-				reset($parts);
-				foreach ($parts as $part) {
-					if (!isset($queries[$part])) return false;
-					$url = explode('=', $queries[$part], 2);
+			// The address is a route that has a keyword: validate() redirects it to the keyword with the current parameters
+			if ($page === null && $this->getKeywordByQuery($route_) !== null) {
+				$page = $this->resolveQueries(array($route_));
 
-					if ($url[0] == 'category_id') {
-						if (!isset($this->request->get['path'])) {
-							$this->request->get['path'] = $url[1];
-						} else {
-							$this->request->get['path'] .= '_' . $url[1];
-						}
-					} elseif (count($url) > 1) {
-						$this->request->get[$url[0]] = $url[1];
-					}
+				if ($page !== null && $page['route'] !== $route_) {
+					$page = null;
 				}
-			} else {
+			}
+
+			// Nothing is written to the request before the whole address is resolved,
+			// and the ids a visitor has sent never choose the page
+			if ($page === null) {
 				$this->request->get['route'] = 'error/not_found';
-			}
+			} else {
+				foreach ($page['params'] as $key => $value) {
+					$this->request->get[$key] = $value;
+				}
 
-			if (isset($this->request->get['product_id'])) {
-				$this->request->get['route'] = 'product/product';
-				if (!isset($this->request->get['path'])) {
+				$this->request->get['route'] = $page['route'];
+
+				if ($page['route'] === 'product/product' && !isset($this->request->get['path'])) {
 					$path = $this->getPathByProduct($this->request->get['product_id']);
 					if ($path) $this->request->get['path'] = $path;
-				}
-			} elseif (isset($this->request->get['path'])) {
-				$this->request->get['route'] = 'product/category';
-			} elseif (isset($this->request->get['manufacturer_id'])) {
-				$this->request->get['route'] = 'product/manufacturer/info';
-			} elseif (isset($this->request->get['information_id'])) {
-				$this->request->get['route'] = 'information/information';
-			} elseif (isset($this->cache_data['queries'][$route_])) {
-				// The address is a route that has a keyword: validate() redirects it to the keyword with the current parameters
-				$this->request->get['route'] = $route_;
-			} else {
-				if (isset($queries[$parts[0]])) {
-					$this->request->get['route'] = $queries[$parts[0]];
 				}
 			}
 
@@ -224,23 +213,13 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			$queries[] = $route;
 		}
 
-		$rows = array();
-		foreach ($queries as $query) {
-			if (isset($this->cache_data['queries'][$query])) {
-				$rows[] = array('query' => $query, 'keyword' => $this->cache_data['queries'][$query]);
-			}
-		}
-
-		if (count($rows) != count($queries)) return $link;
-
-		$aliases = array();
-		foreach ($rows as $row) {
-			$aliases[$row['query']] = $row['keyword'];
-		}
-
 		$seo_url = '';
 		foreach ($queries as $query) {
-			$seo_url .= '/' . rawurlencode($aliases[$query]);
+			$keyword = $this->getKeywordByQuery($query);
+
+			if ($keyword === null) return $link;
+
+			$seo_url .= '/' . rawurlencode($keyword);
 		}
 
 		$seo_url = trim($seo_url, '/');
@@ -264,6 +243,129 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		}
 
 		return $seo_url;
+	}
+
+	/**
+	 * Keyword -> query. Only looks up: the request, the headers and the route are not touched.
+	 *
+	 * @param bool $other_languages also look for the keyword of another language of this store, one SQL query
+	 *
+	 * @return string|null null when there is no such keyword; an empty query is returned as it is
+	 */
+	private function getQueryByKeyword($keyword, $other_languages = false) {
+		$keyword = (string)$keyword;
+
+		$this->loadCache();
+
+		if (isset($this->cache_data['keywords'][$keyword])) {
+			return (string)$this->cache_data['keywords'][$keyword];
+		}
+
+		if (!$other_languages) {
+			return null;
+		}
+
+		$query = $this->db->query("SELECT `query` FROM " . DB_PREFIX . "seo_url WHERE keyword = '" . $this->db->escape($keyword) . "' AND store_id = '" . (int)$this->config->get('config_store_id') . "' ORDER BY (language_id = '" . (int)$this->config->get('config_language_id') . "') DESC, seo_url_id LIMIT 1");
+
+		return $query->row ? (string)$query->row['query'] : null;
+	}
+
+	/**
+	 * Query -> keyword of the current store and language, from the map only.
+	 *
+	 * @return string|null null when the query has no keyword
+	 */
+	private function getKeywordByQuery($query) {
+		$query = (string)$query;
+
+		$this->loadCache();
+
+		if (isset($this->cache_data['queries'][$query])) {
+			return (string)$this->cache_data['queries'][$query];
+		}
+
+		return null;
+	}
+
+	/**
+	 * The kinds of seo_url.query the module supports. The whole string must match, nothing is cut or corrected.
+	 *
+	 * @return array|null array('type' => 'category_id'|'product_id'|'manufacturer_id'|'information_id', 'id' => string)
+	 *                    or array('type' => 'route', 'route' => string); null for every other string
+	 */
+	private function classifyQuery($query) {
+		if (!is_string($query)) {
+			return null;
+		}
+
+		if (preg_match('/^(category_id|product_id|manufacturer_id|information_id)=([1-9][0-9]{0,9})$/D', $query, $match)) {
+			// The ids of the stock schema are signed INT
+			if (strlen($match[2]) === 10 && strcmp($match[2], '2147483647') > 0) {
+				return null;
+			}
+
+			return array('type' => $match[1], 'id' => $match[2]);
+		}
+
+		if (preg_match('/^[A-Za-z0-9_]+(?:\/[A-Za-z0-9_]+)*$/D', $query)) {
+			return array('type' => 'route', 'route' => $query);
+		}
+
+		return null;
+	}
+
+	/**
+	 * The page a sequence of queries opens: categories, categories and a product, one manufacturer,
+	 * one information page or one route. Every other sequence is not a page.
+	 *
+	 * @return array|null array('route' => string, 'params' => array)
+	 */
+	private function resolveQueries(array $queries) {
+		$categories = array();
+		$entity = null;
+
+		foreach ($queries as $query) {
+			$item = $this->classifyQuery($query);
+
+			// Nothing follows a product, a manufacturer or an information page
+			if ($item === null || $entity !== null) {
+				return null;
+			}
+
+			if ($item['type'] === 'route') {
+				return (count($queries) === 1) ? array('route' => $item['route'], 'params' => array()) : null;
+			}
+
+			if ($item['type'] === 'category_id') {
+				if (in_array($item['id'], $categories, true)) {
+					return null;
+				}
+
+				$categories[] = $item['id'];
+			} else {
+				$entity = $item;
+			}
+		}
+
+		if ($entity === null) {
+			return $categories ? array('route' => 'product/category', 'params' => array('path' => implode('_', $categories))) : null;
+		}
+
+		if ($entity['type'] === 'product_id') {
+			$params = $categories ? array('path' => implode('_', $categories)) : array();
+
+			return array('route' => 'product/product', 'params' => $params + array('product_id' => $entity['id']));
+		}
+
+		if ($categories) {
+			return null;
+		}
+
+		if ($entity['type'] === 'manufacturer_id') {
+			return array('route' => 'product/manufacturer/info', 'params' => array('manufacturer_id' => $entity['id']));
+		}
+
+		return array('route' => 'information/information', 'params' => array('information_id' => $entity['id']));
 	}
 
 	private function loadCache() {
@@ -439,19 +541,26 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		$data = array_diff_key($this->request->get, array_flip($exclude));
 
-		// Request::clean() has applied htmlspecialchars(): restore the values the visitor sent
-		return http_build_query($this->decodeValues($data), '', '&');
+		// Request::clean() has applied htmlspecialchars() to the names and to the values: restore what the visitor sent
+		return http_build_query($this->decodeQuery($data), '', '&');
 	}
 
-	private function decodeValues($data) {
-		if (is_array($data)) {
-			foreach ($data as $key => $value) {
-				$data[$key] = $this->decodeValues($value);
-			}
-
-			return $data;
+	// Exactly one layer is removed, the one Request::clean() has added
+	private function decodeQuery($data) {
+		if (!is_array($data)) {
+			return htmlspecialchars_decode((string)$data, ENT_COMPAT);
 		}
 
-		return htmlspecialchars_decode((string)$data, ENT_COMPAT);
+		$decoded = array();
+
+		foreach ($data as $key => $value) {
+			if (is_string($key)) {
+				$key = htmlspecialchars_decode($key, ENT_COMPAT);
+			}
+
+			$decoded[$key] = $this->decodeQuery($value);
+		}
+
+		return $decoded;
 	}
 }

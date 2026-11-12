@@ -2,7 +2,7 @@
 <modification>
     <name>SEO Pro</name>
     <code>seo_pro</code>
-    <version>1.6.2</version>
+    <version>1.6.3</version>
     <author>eniarku fork</author>
     <link>https://github.com/eniarku/seo_pro</link>
     
@@ -37,131 +37,427 @@
 
     <file path="admin/controller/setting/setting.php">
         <operation error="skip">
-            <search><![CDATA[
-                if (isset($this->request->post['config_file_max_size'])) {
-            ]]></search>
+            <search><![CDATA[$this->model_setting_setting->editSetting('config', $this->request->post);]]></search>
             <add position="before"><![CDATA[
-                if (isset($this->request->post['config_seo_url_type'])) {
-                    $data['config_seo_url_type'] = $this->request->post['config_seo_url_type'];
-                } elseif ($this->config->get('config_seo_url_type')) {
-                    $data['config_seo_url_type'] = $this->config->get('config_seo_url_type');
-                } else {
-                    $data['config_seo_url_type'] = 'seo_url';
-                }
+			$this->request->post = $this->seoProComplete($this->request->post, 0);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if (isset($this->request->post['config_file_max_size'])) {]]></search>
+            <add position="before"><![CDATA[
+		$data = $this->seoProForm($data, 0);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if ($this->error && !isset($this->error['warning'])) {]]></search>
+            <add position="before"><![CDATA[
+		$this->seoProValidate(0);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[protected function validate() {]]></search>
+            <add position="before"><![CDATA[
+	// SEO Pro: the four SEO settings of the form. The same code is added to setting/setting and to setting/store.
+	private $seo_pro_state = null;
 
-                $data['seo_types'] = array();
-                $data['seo_types'][] = array('type' => 'seo_url', 'name' => $this->language->get('text_seo_url'));
-                $data['seo_types'][] = array('type' => 'seo_pro', 'name' => $this->language->get('text_seo_pro'));
+	// The stored form of a value, or null when the value is not allowed
+	private function seoProNormalize($key, $value) {
+		if ($key == 'config_seo_url' || $key == 'config_seo_url_include_path') {
+			return ($value === 0 || $value === 1 || $value === '0' || $value === '1') ? (string)$value : null;
+		}
 
-                if (isset($this->request->post['config_seo_url_include_path'])) {
-                    $data['config_seo_url_include_path'] = $this->request->post['config_seo_url_include_path'];
-                } else {
-                    $data['config_seo_url_include_path'] = $this->config->get('config_seo_url_include_path');
-                }
+		if ($key == 'config_seo_url_type') {
+			return ($value === 'seo_url' || $value === 'seo_pro') ? $value : null;
+		}
 
-                if (isset($this->request->post['config_seo_url_postfix'])) {
-                    $data['config_seo_url_postfix'] = $this->request->post['config_seo_url_postfix'];
-                } else {
-                    $data['config_seo_url_postfix'] = $this->config->get('config_seo_url_postfix');
-                }
+		return is_string($value) ? $value : null;
+	}
+
+	// Each setting comes from the first source that has its key: the form, the store itself, the default store, the default value.
+	// A wrong value is an error and is never replaced by the next source. $store_id: null for a new store.
+	private function seoProState($store_id) {
+		if ($this->seo_pro_state !== null) {
+			return $this->seo_pro_state;
+		}
+
+		$this->load->model('setting/setting');
+
+		$sources = array();
+
+		if (is_array($this->request->post)) {
+			$sources[] = $this->request->post;
+		}
+
+		if ($store_id) {
+			$sources[] = $this->model_setting_setting->getSetting('config', $store_id);
+		}
+
+		$sources[] = $this->model_setting_setting->getSetting('config', 0);
+
+		$sources[] = array(
+			'config_seo_url'              => '0',
+			'config_seo_url_type'         => 'seo_url',
+			'config_seo_url_include_path' => '0',
+			'config_seo_url_postfix'      => ''
+		);
+
+		$state = array();
+
+		foreach (array_keys(end($sources)) as $key) {
+			foreach ($sources as $source) {
+				if (is_array($source) && array_key_exists($key, $source)) {
+					$value = $this->seoProNormalize($key, $source[$key]);
+
+					break;
+				}
+			}
+
+			$state[$key] = array('value' => $value, 'valid' => $value !== null);
+		}
+
+		$this->seo_pro_state = $state;
+
+		return $state;
+	}
+
+	private function seoProValidate($store_id) {
+		foreach ($this->seoProState($store_id) as $key => $setting) {
+			if (!$setting['valid']) {
+				$this->error[substr($key, 7)] = $this->language->get('error_' . substr($key, 7));
+			}
+		}
+	}
+
+	// editSetting() deletes the whole group config: the settings the form did not send are saved again
+	private function seoProComplete($post, $store_id) {
+		foreach ($this->seoProState($store_id) as $key => $setting) {
+			if ($setting['valid']) {
+				$post[$key] = $setting['value'];
+			}
+		}
+
+		return $post;
+	}
+
+	private function seoProForm($data, $store_id) {
+		foreach ($this->seoProState($store_id) as $key => $setting) {
+			// Request::clean() has escaped the value once: the same single layer for a value of any origin
+			$data[$key] = $setting['valid'] ? htmlspecialchars(htmlspecialchars_decode($setting['value'], ENT_COMPAT), ENT_COMPAT, 'UTF-8') : '';
+			$data[$key . '_invalid'] = !$setting['valid'];
+			$data['error_' . substr($key, 7)] = $setting['valid'] ? '' : $this->language->get('error_' . substr($key, 7));
+		}
+
+		$data['seo_types'] = array();
+		$data['seo_types'][] = array('type' => 'seo_url', 'name' => $this->language->get('text_seo_url'));
+		$data['seo_types'][] = array('type' => 'seo_pro', 'name' => $this->language->get('text_seo_pro'));
+
+		return $data;
+	}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/controller/setting/store.php">
+        <operation error="skip">
+            <search><![CDATA[$this->model_setting_setting->editSetting('config', $this->request->post]]></search>
+            <add position="before"><![CDATA[
+			$this->request->post = $this->seoProComplete($this->request->post, isset($this->request->get['store_id']) ? (int)$this->request->get['store_id'] : null);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if (isset($this->request->post['config_secure'])) {]]></search>
+            <add position="before"><![CDATA[
+		$data = $this->seoProForm($data, isset($this->request->get['store_id']) ? (int)$this->request->get['store_id'] : null);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if ($this->error && !isset($this->error['warning'])) {]]></search>
+            <add position="before"><![CDATA[
+		$this->seoProValidate(isset($this->request->get['store_id']) ? (int)$this->request->get['store_id'] : null);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[protected function validateForm() {]]></search>
+            <add position="before"><![CDATA[
+	// SEO Pro: the four SEO settings of the form. The same code is added to setting/setting and to setting/store.
+	private $seo_pro_state = null;
+
+	// The stored form of a value, or null when the value is not allowed
+	private function seoProNormalize($key, $value) {
+		if ($key == 'config_seo_url' || $key == 'config_seo_url_include_path') {
+			return ($value === 0 || $value === 1 || $value === '0' || $value === '1') ? (string)$value : null;
+		}
+
+		if ($key == 'config_seo_url_type') {
+			return ($value === 'seo_url' || $value === 'seo_pro') ? $value : null;
+		}
+
+		return is_string($value) ? $value : null;
+	}
+
+	// Each setting comes from the first source that has its key: the form, the store itself, the default store, the default value.
+	// A wrong value is an error and is never replaced by the next source. $store_id: null for a new store.
+	private function seoProState($store_id) {
+		if ($this->seo_pro_state !== null) {
+			return $this->seo_pro_state;
+		}
+
+		$this->load->model('setting/setting');
+
+		$sources = array();
+
+		if (is_array($this->request->post)) {
+			$sources[] = $this->request->post;
+		}
+
+		if ($store_id) {
+			$sources[] = $this->model_setting_setting->getSetting('config', $store_id);
+		}
+
+		$sources[] = $this->model_setting_setting->getSetting('config', 0);
+
+		$sources[] = array(
+			'config_seo_url'              => '0',
+			'config_seo_url_type'         => 'seo_url',
+			'config_seo_url_include_path' => '0',
+			'config_seo_url_postfix'      => ''
+		);
+
+		$state = array();
+
+		foreach (array_keys(end($sources)) as $key) {
+			foreach ($sources as $source) {
+				if (is_array($source) && array_key_exists($key, $source)) {
+					$value = $this->seoProNormalize($key, $source[$key]);
+
+					break;
+				}
+			}
+
+			$state[$key] = array('value' => $value, 'valid' => $value !== null);
+		}
+
+		$this->seo_pro_state = $state;
+
+		return $state;
+	}
+
+	private function seoProValidate($store_id) {
+		foreach ($this->seoProState($store_id) as $key => $setting) {
+			if (!$setting['valid']) {
+				$this->error[substr($key, 7)] = $this->language->get('error_' . substr($key, 7));
+			}
+		}
+	}
+
+	// editSetting() deletes the whole group config: the settings the form did not send are saved again
+	private function seoProComplete($post, $store_id) {
+		foreach ($this->seoProState($store_id) as $key => $setting) {
+			if ($setting['valid']) {
+				$post[$key] = $setting['value'];
+			}
+		}
+
+		return $post;
+	}
+
+	private function seoProForm($data, $store_id) {
+		foreach ($this->seoProState($store_id) as $key => $setting) {
+			// Request::clean() has escaped the value once: the same single layer for a value of any origin
+			$data[$key] = $setting['valid'] ? htmlspecialchars(htmlspecialchars_decode($setting['value'], ENT_COMPAT), ENT_COMPAT, 'UTF-8') : '';
+			$data[$key . '_invalid'] = !$setting['valid'];
+			$data['error_' . substr($key, 7)] = $setting['valid'] ? '' : $this->language->get('error_' . substr($key, 7));
+		}
+
+		$data['seo_types'] = array();
+		$data['seo_types'][] = array('type' => 'seo_url', 'name' => $this->language->get('text_seo_url'));
+		$data['seo_types'][] = array('type' => 'seo_pro', 'name' => $this->language->get('text_seo_pro'));
+
+		return $data;
+	}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/en-gb/setting/setting.php|admin/language/en-gb/setting/store.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="before"><![CDATA[
+                $_['text_seo_url']                       = 'Default';
+                $_['text_seo_pro']                       = 'SEO PRO';
+                $_['text_seo_pro_invalid']               = '--- Invalid value ---';
+                $_['entry_seo_url']                      = 'Use SEO URLs';
+                $_['help_seo_url']                       = 'To use SEO URLs, apache module mod-rewrite must be installed and you need to rename the htaccess.txt to .htaccess.';
+                $_['entry_seo_url_type']                 = 'SEO type:';
+                $_['entry_seo_url_include_path']         = 'SEO with categories:';
+                $_['entry_seo_url_include_path_help']    = '/category/subcategory/product';
+                $_['entry_seo_url_postfix']              = 'SEO postfix';
+                $_['entry_seo_url_postfix_help']         = 'Example as .html';
+                $_['help_seo_pro_own']                   = 'Until this store is saved for the first time it uses the SEO settings of the default store. After that the values shown here are saved as the own settings of this store.';
+                $_['error_seo_url']                      = 'Use SEO URLs: choose Yes or No!';
+                $_['error_seo_url_type']                 = 'SEO type: choose one of the listed types!';
+                $_['error_seo_url_include_path']         = 'SEO with categories: choose Yes or No!';
+                $_['error_seo_url_postfix']              = 'SEO postfix must be a text value!';
             ]]></add>
         </operation>
     </file>
 
-    <file path="admin/language/en-gb/setting/setting.php" error="skip">
+    <file path="admin/language/ru-ru/setting/setting.php|admin/language/ru-ru/setting/store.php" error="skip">
         <operation error="skip">
             <search><![CDATA[$_['entry_meta_title']]]></search>
             <add position="before"><![CDATA[
-                $_['text_seo_url']                     = 'Default';
-                $_['text_seo_pro']                     = 'SEO PRO';
-                $_['entry_seo_url_type']               = 'SEO type:';
-                $_['entry_seo_url_include_path']       = 'SEO with categories:';
-                $_['entry_seo_url_include_path_help']  = '/category/subcategory/product';
-                $_['entry_seo_url_postfix']            = 'SEO postfix';
-                $_['entry_seo_url_postfix_help']       = 'Example as .html';
+                $_['text_seo_url']                       = 'По умолчанию';
+                $_['text_seo_pro']                       = 'SEO PRO';
+                $_['text_seo_pro_invalid']               = '--- Недопустимое значение ---';
+                $_['entry_seo_url']                      = 'Включить ЧПУ';
+                $_['help_seo_url']                       = 'Для использования ЧПУ на сервере должен быть установлен модуль Apache mod-rewrite, а файл htaccess.txt переименован в .htaccess.';
+                $_['entry_seo_url_type']                 = 'Тип ЧПУ:';
+                $_['entry_seo_url_include_path']         = 'ЧПУ товаров с категориями:';
+                $_['entry_seo_url_include_path_help']    = '/category/subcategory/product';
+                $_['entry_seo_url_postfix']              = 'Окончание ЧПУ';
+                $_['entry_seo_url_postfix_help']         = 'Например .html';
+                $_['help_seo_pro_own']                   = 'До первого сохранения магазин использует настройки ЧПУ основного магазина. После сохранения показанные здесь значения становятся собственными настройками этого магазина.';
+                $_['error_seo_url']                      = 'Включить ЧПУ: выберите «Да» или «Нет»!';
+                $_['error_seo_url_type']                 = 'Тип ЧПУ: выберите один из типов списка!';
+                $_['error_seo_url_include_path']         = 'ЧПУ товаров с категориями: выберите «Да» или «Нет»!';
+                $_['error_seo_url_postfix']              = 'Окончание ЧПУ должно быть текстом!';
             ]]></add>
         </operation>
     </file>
 
-    <file path="admin/language/ru-ru/setting/setting.php" error="skip">
+    <file path="admin/language/uk-ua/setting/setting.php|admin/language/uk-ua/setting/store.php" error="skip">
         <operation error="skip">
             <search><![CDATA[$_['entry_meta_title']]]></search>
             <add position="before"><![CDATA[
-                $_['text_seo_url']                     = 'По умолчанию';
-                $_['text_seo_pro']                     = 'SEO PRO';
-                $_['entry_seo_url_type']               = 'Тип ЧПУ:';
-                $_['entry_seo_url_include_path']       = 'ЧПУ товаров с категориями:';
-                $_['entry_seo_url_include_path_help']  = '/category/subcategory/product';
-                $_['entry_seo_url_postfix']            = 'Окончание ЧПУ';
-                $_['entry_seo_url_postfix_help']       = 'Например .html';
-            ]]></add>
-        </operation>
-    </file>
-
-    <file path="admin/language/uk-ua/setting/setting.php" error="skip">
-        <operation error="skip">
-            <search><![CDATA[$_['entry_meta_title']]]></search>
-            <add position="before"><![CDATA[
-                $_['text_seo_url']                     = 'Стандартно';
-                $_['text_seo_pro']                     = 'SEO PRO';
-                $_['entry_seo_url_type']               = 'Тип ЧПУ:';
-                $_['entry_seo_url_include_path']       = 'ЧПУ товарів з категоріями:';
-                $_['entry_seo_url_include_path_help']  = '/category/subcategory/product';
-                $_['entry_seo_url_postfix']            = 'Закінчення ЧПУ';
-                $_['entry_seo_url_postfix_help']       = 'Наприклад .html';
+                $_['text_seo_url']                       = 'Стандартно';
+                $_['text_seo_pro']                       = 'SEO PRO';
+                $_['text_seo_pro_invalid']               = '--- Неприпустиме значення ---';
+                $_['entry_seo_url']                      = 'Увімкнути ЧПУ';
+                $_['help_seo_url']                       = 'Для використання ЧПУ на сервері має бути встановлений модуль Apache mod-rewrite, а файл htaccess.txt перейменований на .htaccess.';
+                $_['entry_seo_url_type']                 = 'Тип ЧПУ:';
+                $_['entry_seo_url_include_path']         = 'ЧПУ товарів з категоріями:';
+                $_['entry_seo_url_include_path_help']    = '/category/subcategory/product';
+                $_['entry_seo_url_postfix']              = 'Закінчення ЧПУ';
+                $_['entry_seo_url_postfix_help']         = 'Наприклад .html';
+                $_['help_seo_pro_own']                   = 'До першого збереження магазин використовує налаштування ЧПУ основного магазину. Після збереження показані тут значення стають власними налаштуваннями цього магазину.';
+                $_['error_seo_url']                      = 'Увімкнути ЧПУ: оберіть «Так» або «Ні»!';
+                $_['error_seo_url_type']                 = 'Тип ЧПУ: оберіть один із типів списку!';
+                $_['error_seo_url_include_path']         = 'ЧПУ товарів з категоріями: оберіть «Так» або «Ні»!';
+                $_['error_seo_url_postfix']              = 'Закінчення ЧПУ має бути текстом!';
             ]]></add>
         </operation>
     </file>
 
     <file path="admin/view/template/setting/setting.twig">
         <operation error="skip">
-            <search><![CDATA[
-                <label class="col-sm-2 control-label" for="input-robots">
-            ]]></search>
+            <search><![CDATA[<label class="radio-inline"> {% if config_seo_url %}]]></search>
+            <add position="before"><![CDATA[                    {% if error_seo_url %}<div class="text-danger">{{ error_seo_url }}</div>{% endif %}
+                    {% if config_seo_url_invalid %}<input type="hidden" name="config_seo_url" value="" />{% endif %}]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[{% if config_seo_url %}]]></search>
+            <add position="replace"><![CDATA[{% if config_seo_url == '1' %}]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[{% if not config_seo_url %}]]></search>
+            <add position="replace"><![CDATA[{% if config_seo_url == '0' %}]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[<label class="col-sm-2 control-label" for="input-robots">]]></search>
             <add position="before" offset="1"><![CDATA[
-                <div class="form-group">
+                <div class="form-group{% if error_seo_url_type %} has-error{% endif %}">
                   <label class="col-sm-2 control-label" for="config_seo_url_type">{{ entry_seo_url_type }}</label>
                   <div class="col-sm-10">
-                  <select id="config_seo_url_type" class="form-control" name="config_seo_url_type">
-                    {% for seo_type in seo_types %}
-                      {% if seo_type.type == config_seo_url_type %}
-                        <option value="{{ seo_type.type }}" selected="selected">{{ seo_type.name }}</option>
-                      {% else %}
-                        <option value="{{ seo_type.type }}">{{ seo_type.name }}</option>
-                      {% endif %}
-                    {% endfor %}
-                  </select>
+                    <select id="config_seo_url_type" class="form-control" name="config_seo_url_type">
+                      {% if config_seo_url_type_invalid %}<option value="" selected="selected">{{ text_seo_pro_invalid }}</option>{% endif %}
+                      {% for seo_type in seo_types %}
+                      <option value="{{ seo_type.type }}"{% if seo_type.type == config_seo_url_type %} selected="selected"{% endif %}>{{ seo_type.name }}</option>
+                      {% endfor %}
+                    </select>
+                    {% if error_seo_url_type %}<div class="text-danger">{{ error_seo_url_type }}</div>{% endif %}
                   </div>
                 </div>
-                <div class="form-group">
+                <div class="form-group{% if error_seo_url_include_path %} has-error{% endif %}">
                   <label class="col-sm-2 control-label"><span data-toggle="tooltip" title="{{ entry_seo_url_include_path_help }}">{{ entry_seo_url_include_path }}</span></label>
                   <div class="col-sm-10">
-                  {% if config_seo_url_include_path %}
+                    {% if config_seo_url_include_path_invalid %}<input type="hidden" name="config_seo_url_include_path" value="" />{% endif %}
                     <label class="radio-inline">
-                    <input type="radio" name="config_seo_url_include_path" value="1" checked="checked"/>
-                    {{ text_yes }}
+                      <input type="radio" name="config_seo_url_include_path" value="1"{% if config_seo_url_include_path == '1' %} checked="checked"{% endif %} />
+                      {{ text_yes }}
                     </label>
                     <label class="radio-inline">
-                    <input type="radio" name="config_seo_url_include_path" value="0"/>
-                    {{ text_no }}
+                      <input type="radio" name="config_seo_url_include_path" value="0"{% if config_seo_url_include_path == '0' %} checked="checked"{% endif %} />
+                      {{ text_no }}
                     </label>
-                  {% else %}
+                    {% if error_seo_url_include_path %}<div class="text-danger">{{ error_seo_url_include_path }}</div>{% endif %}
+                  </div>
+                </div>
+                <div class="form-group{% if error_seo_url_postfix %} has-error{% endif %}">
+                  <label class="col-sm-2 control-label" for="config_seo_url_postfix"><span data-toggle="tooltip" title="{{ entry_seo_url_postfix_help }}">{{ entry_seo_url_postfix }}</span></label>
+                  <div class="col-sm-10">
+                    <input type="text" name="config_seo_url_postfix" value="{{ config_seo_url_postfix }}" id="config_seo_url_postfix" class="form-control" />
+                    {% if error_seo_url_postfix %}<div class="text-danger">{{ error_seo_url_postfix }}</div>{% endif %}
+                  </div>
+                </div>
+            ]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/view/template/setting/store_form.twig">
+        <operation error="skip">
+            <search><![CDATA[<div class="tab-pane" id="tab-server">]]></search>
+            <add position="after"><![CDATA[
+                <div class="form-group{% if error_seo_url %} has-error{% endif %}">
+                  <label class="col-sm-2 control-label"><span data-toggle="tooltip" title="{{ help_seo_url }}">{{ entry_seo_url }}</span></label>
+                  <div class="col-sm-10">
+                    {% if config_seo_url_invalid %}<input type="hidden" name="config_seo_url" value="" />{% endif %}
                     <label class="radio-inline">
-                    <input type="radio" name="config_seo_url_include_path" value="1"/>
-                    {{ text_yes }}
+                      <input type="radio" name="config_seo_url" value="1"{% if config_seo_url == '1' %} checked="checked"{% endif %} />
+                      {{ text_yes }}
                     </label>
                     <label class="radio-inline">
-                    <input type="radio" name="config_seo_url_include_path" value="0" checked="checked"/>
-                    {{ text_no }}
+                      <input type="radio" name="config_seo_url" value="0"{% if config_seo_url == '0' %} checked="checked"{% endif %} />
+                      {{ text_no }}
                     </label>
-                  {% endif %}
+                    {% if error_seo_url %}<div class="text-danger">{{ error_seo_url }}</div>{% endif %}
+                  </div>
+                </div>
+                <div class="form-group{% if error_seo_url_type %} has-error{% endif %}">
+                  <label class="col-sm-2 control-label" for="config_seo_url_type">{{ entry_seo_url_type }}</label>
+                  <div class="col-sm-10">
+                    <select id="config_seo_url_type" class="form-control" name="config_seo_url_type">
+                      {% if config_seo_url_type_invalid %}<option value="" selected="selected">{{ text_seo_pro_invalid }}</option>{% endif %}
+                      {% for seo_type in seo_types %}
+                      <option value="{{ seo_type.type }}"{% if seo_type.type == config_seo_url_type %} selected="selected"{% endif %}>{{ seo_type.name }}</option>
+                      {% endfor %}
+                    </select>
+                    {% if error_seo_url_type %}<div class="text-danger">{{ error_seo_url_type }}</div>{% endif %}
+                  </div>
+                </div>
+                <div class="form-group{% if error_seo_url_include_path %} has-error{% endif %}">
+                  <label class="col-sm-2 control-label"><span data-toggle="tooltip" title="{{ entry_seo_url_include_path_help }}">{{ entry_seo_url_include_path }}</span></label>
+                  <div class="col-sm-10">
+                    {% if config_seo_url_include_path_invalid %}<input type="hidden" name="config_seo_url_include_path" value="" />{% endif %}
+                    <label class="radio-inline">
+                      <input type="radio" name="config_seo_url_include_path" value="1"{% if config_seo_url_include_path == '1' %} checked="checked"{% endif %} />
+                      {{ text_yes }}
+                    </label>
+                    <label class="radio-inline">
+                      <input type="radio" name="config_seo_url_include_path" value="0"{% if config_seo_url_include_path == '0' %} checked="checked"{% endif %} />
+                      {{ text_no }}
+                    </label>
+                    {% if error_seo_url_include_path %}<div class="text-danger">{{ error_seo_url_include_path }}</div>{% endif %}
+                  </div>
+                </div>
+                <div class="form-group{% if error_seo_url_postfix %} has-error{% endif %}">
+                  <label class="col-sm-2 control-label" for="config_seo_url_postfix"><span data-toggle="tooltip" title="{{ entry_seo_url_postfix_help }}">{{ entry_seo_url_postfix }}</span></label>
+                  <div class="col-sm-10">
+                    <input type="text" name="config_seo_url_postfix" value="{{ config_seo_url_postfix }}" id="config_seo_url_postfix" class="form-control" />
+                    {% if error_seo_url_postfix %}<div class="text-danger">{{ error_seo_url_postfix }}</div>{% endif %}
                   </div>
                 </div>
                 <div class="form-group">
-                  <label class="col-sm-2 control-label" for="config_seo_url_postfix"><span data-toggle="tooltip" title="{{ entry_seo_url_postfix_help }}">{{ entry_seo_url_postfix }}</span></label>
-                  <div class="col-sm-10">
-                  <input type="text" name="config_seo_url_postfix" value="{{ config_seo_url_postfix }}" id="config_seo_url_postfix" class="form-control"/>
-                  </div>
+                  <div class="col-sm-10 col-sm-offset-2"><p class="help-block">{{ help_seo_pro_own }}</p></div>
                 </div>
             ]]></add>
         </operation>
@@ -205,19 +501,107 @@
 
     <file path="admin/model/catalog/product.php">
         <operation error="skip">
+            <search><![CDATA[public function addProduct($data) {]]></search>
+            <add position="after"><![CDATA[
+                    // SEO Pro: one checked list of categories for the core INSERTs and for the main category, before any write
+                    $data['product_category'] = $this->seoProCategories($data);
+            ]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[public function editProduct($product_id, $data) {]]></search>
+            <add position="after"><![CDATA[
+                    // SEO Pro: one checked list of categories for the core INSERTs and for the main category, before any write
+                    $data['product_category'] = $this->seoProCategories($data);
+            ]]></add>
+        </operation>
+        <operation error="skip">
             <search><![CDATA[if (isset($data['product_related'])) {]]></search>
-            <add position="before"><![CDATA[        if ($this->config->get('seo_pro_schema_failed')) {
-                        // The column main_category is not created yet
-                    } elseif(isset($data['main_category_id']) && $data['main_category_id'] > 0) {
-                        $this->db->query("DELETE FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "' AND category_id = '" . (int)$data['main_category_id'] . "'");
-                        $this->db->query("INSERT INTO " . DB_PREFIX . "product_to_category SET product_id = '" . (int)$product_id . "', category_id = '" . (int)$data['main_category_id'] . "', main_category = 1");
-                    } elseif(isset($data['product_category'][0])) {
-                        $this->db->query("UPDATE " . DB_PREFIX . "product_to_category SET main_category = 1 WHERE product_id = '" . (int)$product_id . "' AND category_id = '" . (int)$data['product_category'][0] . "'");
-                    }]]></add>
+            <add position="before"><![CDATA[
+                    $this->seoProSetMainCategory($product_id, $data);
+            ]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[$data['product_category'] = $this->getProductCategories($product_id);]]></search>
+            <add position="after"><![CDATA[
+                    // SEO Pro: the copy keeps the main category; without the column this is 0 and no query
+                    $data['main_category_id'] = $this->getProductMainCategoryId($product_id);
+            ]]></add>
         </operation>
         <operation error="skip">
             <search><![CDATA[public function getProductRelated($product_id) {]]></search>
             <add position="before"><![CDATA[
+                // A category id: a positive int or a string of decimal digits within signed INT. 0 for everything else.
+                private function seoProCategoryId($value) {
+                    if (is_int($value)) {
+                        return ($value >= 1 && $value <= 2147483647) ? $value : 0;
+                    }
+
+                    if (!is_string($value) || !preg_match('/^[0-9]+$/D', $value)) {
+                        return 0;
+                    }
+
+                    $value = ltrim($value, '0');
+
+                    if ($value === '' || strlen($value) > 10 || (strlen($value) === 10 && strcmp($value, '2147483647') > 0)) {
+                        return 0;
+                    }
+
+                    return (int)$value;
+                }
+
+                // The categories of the product: valid ids, without duplicates, in the order they were sent.
+                // No key is an empty list; a key with anything but an array, null included, is a wrong call.
+                private function seoProCategories($data) {
+                    if (!is_array($data) || !array_key_exists('product_category', $data)) {
+                        return array();
+                    }
+
+                    if (!is_array($data['product_category'])) {
+                        throw new \InvalidArgumentException('SEO Pro: product_category must be an array');
+                    }
+
+                    $categories = array();
+
+                    foreach ($data['product_category'] as $value) {
+                        $category_id = $this->seoProCategoryId($value);
+
+                        if ($category_id && !in_array($category_id, $categories, true)) {
+                            $categories[] = $category_id;
+                        }
+                    }
+
+                    return $categories;
+                }
+
+                // Marks one of the saved categories of the product as the main one. Never creates a link.
+                private function seoProSetMainCategory($product_id, $data) {
+                    // The column main_category is not created yet
+                    if ($this->config->get('seo_pro_schema_failed')) {
+                        return;
+                    }
+
+                    $saved = array();
+
+                    foreach ($this->db->query("SELECT category_id FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "'")->rows as $row) {
+                        $saved[] = (int)$row['category_id'];
+                    }
+
+                    $categories = array_values(array_intersect(isset($data['product_category']) && is_array($data['product_category']) ? $data['product_category'] : array(), $saved));
+
+                    if (!$categories) {
+                        return;
+                    }
+
+                    $main_category_id = $this->seoProCategoryId(isset($data['main_category_id']) ? $data['main_category_id'] : 0);
+
+                    // No choice, or the chosen category is not a category of the product: the first one
+                    if (!in_array($main_category_id, $categories, true)) {
+                        $main_category_id = $categories[0];
+                    }
+
+                    $this->db->query("UPDATE " . DB_PREFIX . "product_to_category SET main_category = IF(category_id = '" . (int)$main_category_id . "', 1, 0) WHERE product_id = '" . (int)$product_id . "'");
+                }
+
                 public function getProductMainCategoryId($product_id) {
                     // The column main_category is not created yet
                     if ($this->config->get('seo_pro_schema_failed')) {
