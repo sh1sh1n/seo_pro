@@ -7,6 +7,8 @@ set_error_handler(function ($no, $str) { if (strpos($str, 'Undefined') === 0) re
 if (empty($argv[1])) { fwrite(STDERR, "usage: php test_product_categories.php <ocmod_sim out dir>\n"); exit(2); }
 $out = rtrim($argv[1], '/');
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_cache.php';
+// OpenCart loads the library with its autoloader
+require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_schema.php';
 
 class Res { public $rows; public $row; public $num_rows; function __construct($rows = []) { $this->rows = $rows; $this->row = $rows[0] ?? []; $this->num_rows = count($rows); } }
 // p2c: product_id => [category_id => main_category]; the pair (product_id, category_id) is the primary key
@@ -43,7 +45,7 @@ function d($data) { return $data + ['product_description' => []]; }
 
 $fail = 0;
 function check($name, $got, $exp) { global $fail; $ok = $got === $exp; if (!$ok) $fail++; echo ($ok ? 'ok   ' : 'FAIL ') . $name . ($ok ? '' : "\n       got: " . var_export($got, true) . "\n       exp: " . var_export($exp, true)) . "\n"; }
-function env($column = true) { $r = new Registry(); $db = new DB(); $db->column = $column; $c = new Config(); $c->d['seo_pro_schema_failed'] = !$column; $c->d['config_language_id'] = 1;
+function env($column = true) { $r = new Registry(); $db = new DB(); $db->column = $column; $c = new Config(); $c->d['seo_pro_schema_failed'] = !$column; $c->d['config_language_id'] = 1; $c->d['seo_pro_h1_product_ready'] = true;
 	$r->set('db', $db); $r->set('config', $c); $r->set('cache', new Cache()); return [$r, new ModelCatalogProduct($r), $db]; }
 // add (product 101) and edit (product 7 that had the categories 10* and 12) with the same data; returns the links of both
 function both($data, $column = true) {

@@ -2,7 +2,7 @@
 <modification>
     <name>SEO Pro</name>
     <code>seo_pro</code>
-    <version>1.6.3</version>
+    <version>1.7</version>
     <author>eniarku fork</author>
     <link>https://github.com/eniarku/seo_pro</link>
     
@@ -17,9 +17,8 @@
         <operation error="skip">
             <search><![CDATA[// Set time zone]]></search>
             <add position="before"><![CDATA[
-		if ($this->config->get('seo_pro_schema_version') !== Seo_pro_schema::VERSION) {
-			$this->config->set('seo_pro_schema_failed', !(new Seo_pro_schema($this->db, $this->log, $this->cache))->install());
-		}
+		// SEO Pro: the schema migration and the readiness flags of this request
+		Seo_pro_schema::startup($this->config, $this->db, $this->log, $this->cache);
             ]]></add>
         </operation>
     </file>
@@ -28,9 +27,8 @@
         <operation error="skip">
             <search><![CDATA[// Set time zone]]></search>
             <add position="before"><![CDATA[
-		if ($this->config->get('seo_pro_schema_version') !== Seo_pro_schema::VERSION) {
-			$this->config->set('seo_pro_schema_failed', !(new Seo_pro_schema($this->db, $this->log, $this->cache))->install());
-		}
+		// SEO Pro: the schema migration and the readiness flags of this request
+		Seo_pro_schema::startup($this->config, $this->db, $this->log, $this->cache);
             ]]></add>
         </operation>
     </file>
@@ -505,6 +503,9 @@
             <add position="after"><![CDATA[
                     // SEO Pro: one checked list of categories for the core INSERTs and for the main category, before any write
                     $data['product_category'] = $this->seoProCategories($data);
+
+                    // SEO Pro: H1 of the descriptions is checked and completed before any write
+                    $data = Seo_pro_schema::prepareH1($this->db, $this->config, 'product', 0, $data);
             ]]></add>
         </operation>
         <operation error="skip">
@@ -512,6 +513,9 @@
             <add position="after"><![CDATA[
                     // SEO Pro: one checked list of categories for the core INSERTs and for the main category, before any write
                     $data['product_category'] = $this->seoProCategories($data);
+
+                    // SEO Pro: H1 of the descriptions is checked and completed before any write
+                    $data = Seo_pro_schema::prepareH1($this->db, $this->config, 'product', $product_id, $data);
             ]]></add>
         </operation>
         <operation error="skip">
@@ -710,6 +714,649 @@
             <add position="after"><![CDATA[
                Seo_pro_cache::clear($this->db, $this->cache);
             ]]></add>
+        </operation>
+    </file>
+
+    <!-- SEO Pro 1.7: HTML H1 of products, categories and information pages; descriptions of manufacturers -->
+
+    <file path="admin/model/catalog/product.php">
+        <!-- meta_h1 is added to every INSERT of product_description that has none; another modification that has it in add or in edit only does not hide the other one -->
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~\A(?!.*^[^\n]*INSERT INTO " \. DB_PREFIX \. "product_description SET (?![^\n]*meta_h1))~sm]]></ignoreif>
+            <search regex="true"><![CDATA[~^((?![^\n]*meta_h1)[^\n]*INSERT INTO " \. DB_PREFIX \. "product_description SET [^\n]*?meta_title = '" \. \$this->db->escape\(\$value\['meta_title'\]\) \. "',)~m]]></search>
+            <add><![CDATA[$1 meta_h1 = '" . $this->db->escape($value['meta_h1']) . "',]]></add>
+        </operation>
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~function getProductDescriptions\((?:(?!function\s).)*'meta_h1'\s*=>~s]]></ignoreif>
+            <search><![CDATA['meta_title'       => $result['meta_title'],]]></search>
+            <add position="after"><![CDATA[
+				'meta_h1'          => isset($result['meta_h1']) ? $result['meta_h1'] : '',]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/controller/catalog/product.php">
+        <operation error="skip">
+            <search><![CDATA[if (isset($this->error['meta_title'])) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: the errors of the H1 fields; the form says when the column is not ready
+		$data['error_meta_h1'] = isset($this->error['meta_h1']) ? $this->error['meta_h1'] : array();
+
+		if (!$this->config->get('seo_pro_h1_product_ready') && !$data['error_warning']) {
+			$data['error_warning'] = $this->language->get('error_seo_pro_h1_schema');
+		}
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if ($this->error && !isset($this->error['warning'])) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: H1 of each language. While the column is not ready the descriptions are not saved
+		if (!$this->config->get('seo_pro_h1_product_ready') && !isset($this->error['warning'])) {
+			$this->error['warning'] = $this->language->get('error_seo_pro_h1_schema');
+		}
+
+		foreach (Seo_pro_schema::h1Errors(isset($this->request->post['product_description']) ? $this->request->post['product_description'] : null) as $language_id => $seo_pro_error) {
+			$this->error['meta_h1'][$language_id] = $this->language->get('error_seo_pro_meta_h1');
+		}
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[protected function validateCopy() {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: a copy saves the descriptions, so it waits for the column meta_h1
+		if (!$this->config->get('seo_pro_h1_product_ready')) {
+			$this->error['warning'] = $this->language->get('error_seo_pro_h1_schema');
+		}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/view/template/catalog/product_form.twig">
+        <operation error="skip">
+            <ignoreif><![CDATA[[meta_h1]"]]></ignoreif>
+            <search><![CDATA[<label class="col-sm-2 control-label" for="input-meta-description{{ language.language_id }}">]]></search>
+            <add position="before" offset="1"><![CDATA[
+                  <div class="form-group{% if error_meta_h1[language.language_id] %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-meta-h1{{ language.language_id }}">{{ entry_seo_pro_meta_h1 }}</label>
+                    <div class="col-sm-10">
+                      {% set seo_pro_h1 = product_description[language.language_id].meta_h1 ?? '' %}
+                      <input type="text" name="product_description[{{ language.language_id }}][meta_h1]" value="{{ seo_pro_h1 is iterable ? '' : seo_pro_h1|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}" placeholder="{{ entry_seo_pro_meta_h1 }}" id="input-meta-h1{{ language.language_id }}" class="form-control" />
+                      {% if error_meta_h1[language.language_id] %}
+                      <div class="text-danger">{{ error_meta_h1[language.language_id] }}</div>
+                      {% endif %}
+                    </div>
+                  </div>]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/en-gb/catalog/product.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML Tag H1';
+$_['error_seo_pro_meta_h1']   = 'HTML Tag H1 must be text of at most 255 characters!';
+$_['error_seo_pro_h1_schema'] = 'Warning: the database column for HTML Tag H1 is not ready, the form cannot be saved. The reason is in the error log; the module tries again on the next request.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/ru-ru/catalog/product.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML-тег H1';
+$_['error_seo_pro_meta_h1']   = 'HTML-тег H1 должен быть текстом не длиннее 255 символов!';
+$_['error_seo_pro_h1_schema'] = 'Внимание: колонка базы данных для HTML-тега H1 не готова, форму нельзя сохранить. Причина записана в журнал ошибок; модуль повторит попытку при следующем запросе.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/uk-ua/catalog/product.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML-тег H1';
+$_['error_seo_pro_meta_h1']   = 'HTML-тег H1 має бути текстом не довше 255 символів!';
+$_['error_seo_pro_h1_schema'] = 'Увага: колонка бази даних для HTML-тегу H1 не готова, форму не можна зберегти. Причину записано до журналу помилок; модуль повторить спробу під час наступного запиту.';]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/model/catalog/product.php">
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~function getProduct\((?:(?!function\s).)*'meta_h1'\s*=>~s]]></ignoreif>
+            <search><![CDATA['meta_title'       => $query->row['meta_title'],]]></search>
+            <add position="after"><![CDATA[
+				'meta_h1'          => isset($query->row['meta_h1']) ? $query->row['meta_h1'] : '',]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/controller/product/product.php">
+        <operation error="skip">
+            <search><![CDATA[$data['heading_title'] = $product_info['name'];]]></search>
+            <add position="after"><![CDATA[
+			// SEO Pro: a filled H1 replaces the heading; '0' is a filled H1
+			if ($this->config->get('seo_pro_h1_product_ready') && isset($product_info['meta_h1']) && is_string($product_info['meta_h1']) && $product_info['meta_h1'] !== '') {
+				$data['heading_title'] = Seo_pro_schema::text($product_info['meta_h1']);
+			}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/model/catalog/category.php">
+        <operation error="skip">
+            <search><![CDATA[public function addCategory($data) {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: H1 of the descriptions is checked and completed before any write
+		$data = Seo_pro_schema::prepareH1($this->db, $this->config, 'category', 0, $data);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[public function editCategory($category_id, $data) {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: H1 of the descriptions is checked and completed before any write; a language without meta_h1 keeps its stored H1
+		$data = Seo_pro_schema::prepareH1($this->db, $this->config, 'category', $category_id, $data);
+]]></add>
+        </operation>
+        <!-- meta_h1 is added to every INSERT of category_description that has none; another modification that has it in add or in edit only does not hide the other one -->
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~\A(?!.*^[^\n]*INSERT INTO " \. DB_PREFIX \. "category_description SET (?![^\n]*meta_h1))~sm]]></ignoreif>
+            <search regex="true"><![CDATA[~^((?![^\n]*meta_h1)[^\n]*INSERT INTO " \. DB_PREFIX \. "category_description SET [^\n]*?meta_title = '" \. \$this->db->escape\(\$value\['meta_title'\]\) \. "',)~m]]></search>
+            <add><![CDATA[$1 meta_h1 = '" . $this->db->escape($value['meta_h1']) . "',]]></add>
+        </operation>
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~function getCategoryDescriptions\((?:(?!function\s).)*'meta_h1'\s*=>~s]]></ignoreif>
+            <search><![CDATA['meta_title'       => $result['meta_title'],]]></search>
+            <add position="after"><![CDATA[
+				'meta_h1'          => isset($result['meta_h1']) ? $result['meta_h1'] : '',]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/controller/catalog/category.php">
+        <operation error="skip">
+            <search><![CDATA[if (isset($this->error['meta_title'])) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: the errors of the H1 fields; the form says when the column is not ready
+		$data['error_meta_h1'] = isset($this->error['meta_h1']) ? $this->error['meta_h1'] : array();
+
+		if (!$this->config->get('seo_pro_h1_category_ready') && !$data['error_warning']) {
+			$data['error_warning'] = $this->language->get('error_seo_pro_h1_schema');
+		}
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if ($this->error && !isset($this->error['warning'])) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: H1 of each language. While the column is not ready the descriptions are not saved
+		if (!$this->config->get('seo_pro_h1_category_ready') && !isset($this->error['warning'])) {
+			$this->error['warning'] = $this->language->get('error_seo_pro_h1_schema');
+		}
+
+		foreach (Seo_pro_schema::h1Errors(isset($this->request->post['category_description']) ? $this->request->post['category_description'] : null) as $language_id => $seo_pro_error) {
+			$this->error['meta_h1'][$language_id] = $this->language->get('error_seo_pro_meta_h1');
+		}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/view/template/catalog/category_form.twig">
+        <operation error="skip">
+            <ignoreif><![CDATA[[meta_h1]"]]></ignoreif>
+            <search><![CDATA[<label class="col-sm-2 control-label" for="input-meta-description{{ language.language_id }}">]]></search>
+            <add position="before" offset="1"><![CDATA[
+                  <div class="form-group{% if error_meta_h1[language.language_id] %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-meta-h1{{ language.language_id }}">{{ entry_seo_pro_meta_h1 }}</label>
+                    <div class="col-sm-10">
+                      {% set seo_pro_h1 = category_description[language.language_id].meta_h1 ?? '' %}
+                      <input type="text" name="category_description[{{ language.language_id }}][meta_h1]" value="{{ seo_pro_h1 is iterable ? '' : seo_pro_h1|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}" placeholder="{{ entry_seo_pro_meta_h1 }}" id="input-meta-h1{{ language.language_id }}" class="form-control" />
+                      {% if error_meta_h1[language.language_id] %}
+                      <div class="text-danger">{{ error_meta_h1[language.language_id] }}</div>
+                      {% endif %}
+                    </div>
+                  </div>]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/en-gb/catalog/category.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML Tag H1';
+$_['error_seo_pro_meta_h1']   = 'HTML Tag H1 must be text of at most 255 characters!';
+$_['error_seo_pro_h1_schema'] = 'Warning: the database column for HTML Tag H1 is not ready, the form cannot be saved. The reason is in the error log; the module tries again on the next request.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/ru-ru/catalog/category.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML-тег H1';
+$_['error_seo_pro_meta_h1']   = 'HTML-тег H1 должен быть текстом не длиннее 255 символов!';
+$_['error_seo_pro_h1_schema'] = 'Внимание: колонка базы данных для HTML-тега H1 не готова, форму нельзя сохранить. Причина записана в журнал ошибок; модуль повторит попытку при следующем запросе.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/uk-ua/catalog/category.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML-тег H1';
+$_['error_seo_pro_meta_h1']   = 'HTML-тег H1 має бути текстом не довше 255 символів!';
+$_['error_seo_pro_h1_schema'] = 'Увага: колонка бази даних для HTML-тегу H1 не готова, форму не можна зберегти. Причину записано до журналу помилок; модуль повторить спробу під час наступного запиту.';]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/controller/product/category.php">
+        <operation error="skip">
+            <search><![CDATA[$data['heading_title'] = $category_info['name'];]]></search>
+            <add position="after"><![CDATA[
+			// SEO Pro: a filled H1 replaces the heading; '0' is a filled H1
+			if ($this->config->get('seo_pro_h1_category_ready') && isset($category_info['meta_h1']) && is_string($category_info['meta_h1']) && $category_info['meta_h1'] !== '') {
+				$data['heading_title'] = Seo_pro_schema::text($category_info['meta_h1']);
+			}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/model/catalog/information.php">
+        <operation error="skip">
+            <search><![CDATA[public function addInformation($data) {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: H1 of the descriptions is checked and completed before any write
+		$data = Seo_pro_schema::prepareH1($this->db, $this->config, 'information', 0, $data);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[public function editInformation($information_id, $data) {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: H1 of the descriptions is checked and completed before any write; a language without meta_h1 keeps its stored H1
+		$data = Seo_pro_schema::prepareH1($this->db, $this->config, 'information', $information_id, $data);
+]]></add>
+        </operation>
+        <!-- meta_h1 is added to every INSERT of information_description that has none; another modification that has it in add or in edit only does not hide the other one -->
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~\A(?!.*^[^\n]*INSERT INTO " \. DB_PREFIX \. "information_description SET (?![^\n]*meta_h1))~sm]]></ignoreif>
+            <search regex="true"><![CDATA[~^((?![^\n]*meta_h1)[^\n]*INSERT INTO " \. DB_PREFIX \. "information_description SET [^\n]*?meta_title = '" \. \$this->db->escape\(\$value\['meta_title'\]\) \. "',)~m]]></search>
+            <add><![CDATA[$1 meta_h1 = '" . $this->db->escape($value['meta_h1']) . "',]]></add>
+        </operation>
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~function getInformationDescriptions\((?:(?!function\s).)*'meta_h1'\s*=>~s]]></ignoreif>
+            <search><![CDATA['meta_title'       => $result['meta_title'],]]></search>
+            <add position="after"><![CDATA[
+				'meta_h1'          => isset($result['meta_h1']) ? $result['meta_h1'] : '',]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/controller/catalog/information.php">
+        <operation error="skip">
+            <search><![CDATA[if (isset($this->error['meta_title'])) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: the errors of the H1 fields; the form says when the column is not ready
+		$data['error_meta_h1'] = isset($this->error['meta_h1']) ? $this->error['meta_h1'] : array();
+
+		if (!$this->config->get('seo_pro_h1_information_ready') && !$data['error_warning']) {
+			$data['error_warning'] = $this->language->get('error_seo_pro_h1_schema');
+		}
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if ($this->error && !isset($this->error['warning'])) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: H1 of each language. While the column is not ready the descriptions are not saved
+		if (!$this->config->get('seo_pro_h1_information_ready') && !isset($this->error['warning'])) {
+			$this->error['warning'] = $this->language->get('error_seo_pro_h1_schema');
+		}
+
+		foreach (Seo_pro_schema::h1Errors(isset($this->request->post['information_description']) ? $this->request->post['information_description'] : null) as $language_id => $seo_pro_error) {
+			$this->error['meta_h1'][$language_id] = $this->language->get('error_seo_pro_meta_h1');
+		}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/view/template/catalog/information_form.twig">
+        <operation error="skip">
+            <ignoreif><![CDATA[[meta_h1]"]]></ignoreif>
+            <search><![CDATA[<label class="col-sm-2 control-label" for="input-meta-description{{ language.language_id }}">]]></search>
+            <add position="before" offset="1"><![CDATA[
+                  <div class="form-group{% if error_meta_h1[language.language_id] %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-meta-h1{{ language.language_id }}">{{ entry_seo_pro_meta_h1 }}</label>
+                    <div class="col-sm-10">
+                      {% set seo_pro_h1 = information_description[language.language_id].meta_h1 ?? '' %}
+                      <input type="text" name="information_description[{{ language.language_id }}][meta_h1]" value="{{ seo_pro_h1 is iterable ? '' : seo_pro_h1|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}" placeholder="{{ entry_seo_pro_meta_h1 }}" id="input-meta-h1{{ language.language_id }}" class="form-control" />
+                      {% if error_meta_h1[language.language_id] %}
+                      <div class="text-danger">{{ error_meta_h1[language.language_id] }}</div>
+                      {% endif %}
+                    </div>
+                  </div>]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/en-gb/catalog/information.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML Tag H1';
+$_['error_seo_pro_meta_h1']   = 'HTML Tag H1 must be text of at most 255 characters!';
+$_['error_seo_pro_h1_schema'] = 'Warning: the database column for HTML Tag H1 is not ready, the form cannot be saved. The reason is in the error log; the module tries again on the next request.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/ru-ru/catalog/information.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML-тег H1';
+$_['error_seo_pro_meta_h1']   = 'HTML-тег H1 должен быть текстом не длиннее 255 символов!';
+$_['error_seo_pro_h1_schema'] = 'Внимание: колонка базы данных для HTML-тега H1 не готова, форму нельзя сохранить. Причина записана в журнал ошибок; модуль повторит попытку при следующем запросе.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/uk-ua/catalog/information.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_meta_title']]]></search>
+            <add position="after"><![CDATA[
+$_['entry_seo_pro_meta_h1']   = 'HTML-тег H1';
+$_['error_seo_pro_meta_h1']   = 'HTML-тег H1 має бути текстом не довше 255 символів!';
+$_['error_seo_pro_h1_schema'] = 'Увага: колонка бази даних для HTML-тегу H1 не готова, форму не можна зберегти. Причину записано до журналу помилок; модуль повторить спробу під час наступного запиту.';]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/controller/information/information.php">
+        <operation error="skip">
+            <search><![CDATA[$data['heading_title'] = $information_info['title'];]]></search>
+            <add position="after"><![CDATA[
+			// SEO Pro: a filled H1 replaces the heading; '0' is a filled H1
+			if ($this->config->get('seo_pro_h1_information_ready') && isset($information_info['meta_h1']) && is_string($information_info['meta_h1']) && $information_info['meta_h1'] !== '') {
+				$data['heading_title'] = Seo_pro_schema::text($information_info['meta_h1']);
+			}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/model/catalog/manufacturer.php">
+        <operation error="skip">
+            <search><![CDATA[public function addManufacturer($data) {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: the descriptions are checked before any write; null when the data has none
+		$seo_pro_descriptions = Seo_pro_schema::prepareManufacturer($this->config, $data);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[public function editManufacturer($manufacturer_id, $data) {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: the descriptions are checked before any write; null when the data has none
+		$seo_pro_descriptions = Seo_pro_schema::prepareManufacturer($this->config, $data);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[if (isset($data['manufacturer_seo_url'])) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: only the sent languages and fields are written, the others keep their values
+		Seo_pro_schema::saveManufacturer($this->db, $manufacturer_id, $seo_pro_descriptions);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[public function deleteManufacturer($manufacturer_id) {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: the descriptions first; while the table is not ready nothing is deleted
+		Seo_pro_schema::deleteManufacturer($this->db, $this->config, $manufacturer_id);
+]]></add>
+        </operation>
+        <operation error="skip">
+            <ignoreif><![CDATA[function getManufacturerDescriptions(]]></ignoreif>
+            <search><![CDATA[public function getManufacturer($manufacturer_id) {]]></search>
+            <add position="before"><![CDATA[
+	public function getManufacturerDescriptions($manufacturer_id) {
+		return Seo_pro_schema::getManufacturer($this->db, $this->config, $manufacturer_id);
+	}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/controller/catalog/manufacturer.php">
+        <operation error="skip">
+            <search><![CDATA[if ((utf8_strlen($this->request->post['name']) < 1) || (utf8_strlen($this->request->post['name']) > 64)) {]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: the descriptions of the manufacturer. While the table is not ready the manufacturer is not saved
+		if (!$this->config->get('seo_pro_manufacturer_description_ready')) {
+			if (!isset($this->error['warning'])) {
+				$this->error['warning'] = $this->language->get('error_seo_pro_md_schema');
+			}
+		} elseif (is_array($this->request->post) && array_key_exists('manufacturer_description', $this->request->post)) {
+			$seo_pro_errors = Seo_pro_schema::manufacturerErrors($this->request->post['manufacturer_description']);
+
+			foreach ($seo_pro_errors['fields'] as $language_id => $fields) {
+				foreach ($fields as $field => $error) {
+					$this->error['seo_pro_description'][$language_id][$field] = $this->language->get($field == 'description' ? 'error_seo_pro_md_description' : 'error_seo_pro_md_text');
+				}
+			}
+
+			if (!isset($this->error['warning']) && ($seo_pro_errors['container'] || $seo_pro_errors['fields'])) {
+				$this->error['warning'] = $this->language->get($seo_pro_errors['container'] ? 'error_seo_pro_md_invalid' : 'error_seo_pro_md_warning');
+			}
+		}
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[protected function validateDelete() {]]></search>
+            <add position="after"><![CDATA[
+		// SEO Pro: the descriptions are deleted with the manufacturer, so the table must be ready
+		if (!$this->config->get('seo_pro_manufacturer_description_ready')) {
+			$this->error['warning'] = $this->language->get('error_seo_pro_md_schema');
+		}
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[$this->load->model('localisation/language');]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: the descriptions of the manufacturer. Each field: the form, the stored value, an empty text
+		$data['seo_pro_description_ready'] = (bool)$this->config->get('seo_pro_manufacturer_description_ready');
+
+		if (!$data['seo_pro_description_ready'] && !$data['error_warning']) {
+			$data['error_warning'] = $this->language->get('error_seo_pro_md_schema');
+		}
+
+		$data['error_seo_pro_description'] = isset($this->error['seo_pro_description']) ? $this->error['seo_pro_description'] : array();
+
+		$data['manufacturer_description'] = Seo_pro_schema::manufacturerFormValues(
+			isset($this->request->post['manufacturer_description']) ? $this->request->post['manufacturer_description'] : array(),
+			isset($this->request->get['manufacturer_id']) ? $this->model_catalog_manufacturer->getManufacturerDescriptions($this->request->get['manufacturer_id']) : array()
+		);
+]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/view/template/catalog/manufacturer_form.twig">
+        <operation error="skip">
+            <ignoreif><![CDATA[manufacturer_description[]]></ignoreif>
+            <search><![CDATA[<li class="active"><a href="#tab-general" data-toggle="tab">{{ tab_general }}</a></li>]]></search>
+            <add position="after"><![CDATA[
+            <li><a href="#tab-seo-pro-description" data-toggle="tab">{{ tab_seo_pro_description }}</a></li>]]></add>
+        </operation>
+        <operation error="skip">
+            <ignoreif><![CDATA[manufacturer_description[]]></ignoreif>
+            <search><![CDATA[<div class="tab-pane" id="tab-seo">]]></search>
+            <add position="before"><![CDATA[
+            <div class="tab-pane" id="tab-seo-pro-description">
+              {% if not seo_pro_description_ready %}
+              <div class="alert alert-warning"><i class="fa fa-exclamation-circle"></i> {{ error_seo_pro_md_schema }}</div>
+              {% endif %}
+              <ul class="nav nav-tabs" id="seo-pro-language">
+                {% for language in languages %}
+                <li><a href="#seo-pro-language{{ language.language_id }}" data-toggle="tab"><img src="language/{{ language.code }}/{{ language.code }}.png" title="{{ language.name }}" /> {{ language.name }}</a></li>
+                {% endfor %}
+              </ul>
+              <div class="tab-content">
+                {% for language in languages %}
+                {% set seo_pro = manufacturer_description[language.language_id] ?? {} %}
+                {% set seo_pro_error = error_seo_pro_description[language.language_id] ?? {} %}
+                <div class="tab-pane" id="seo-pro-language{{ language.language_id }}">
+                  <div class="form-group{% if seo_pro_error.description is defined %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-description{{ language.language_id }}">{{ entry_seo_pro_description }}</label>
+                    <div class="col-sm-10">
+                      <textarea name="manufacturer_description[{{ language.language_id }}][description]" placeholder="{{ entry_seo_pro_description }}" id="input-description{{ language.language_id }}" data-toggle="summernote" data-lang="{{ summernote }}" class="form-control">{{ (seo_pro.description ?? '')|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}</textarea>
+                      {% if seo_pro_error.description is defined %}
+                      <div class="text-danger">{{ seo_pro_error.description }}</div>
+                      {% endif %}
+                    </div>
+                  </div>
+                  <div class="form-group{% if seo_pro_error.meta_title is defined %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-meta-title{{ language.language_id }}">{{ entry_seo_pro_meta_title }}</label>
+                    <div class="col-sm-10">
+                      <input type="text" name="manufacturer_description[{{ language.language_id }}][meta_title]" value="{{ (seo_pro.meta_title ?? '')|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}" placeholder="{{ entry_seo_pro_meta_title }}" id="input-meta-title{{ language.language_id }}" class="form-control" />
+                      {% if seo_pro_error.meta_title is defined %}
+                      <div class="text-danger">{{ seo_pro_error.meta_title }}</div>
+                      {% endif %}
+                    </div>
+                  </div>
+                  <div class="form-group{% if seo_pro_error.meta_h1 is defined %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-meta-h1{{ language.language_id }}">{{ entry_seo_pro_meta_h1 }}</label>
+                    <div class="col-sm-10">
+                      <input type="text" name="manufacturer_description[{{ language.language_id }}][meta_h1]" value="{{ (seo_pro.meta_h1 ?? '')|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}" placeholder="{{ entry_seo_pro_meta_h1 }}" id="input-meta-h1{{ language.language_id }}" class="form-control" />
+                      {% if seo_pro_error.meta_h1 is defined %}
+                      <div class="text-danger">{{ seo_pro_error.meta_h1 }}</div>
+                      {% endif %}
+                    </div>
+                  </div>
+                  <div class="form-group{% if seo_pro_error.meta_description is defined %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-meta-description{{ language.language_id }}">{{ entry_seo_pro_meta_description }}</label>
+                    <div class="col-sm-10">
+                      <textarea name="manufacturer_description[{{ language.language_id }}][meta_description]" rows="5" placeholder="{{ entry_seo_pro_meta_description }}" id="input-meta-description{{ language.language_id }}" class="form-control">{{ (seo_pro.meta_description ?? '')|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}</textarea>
+                      {% if seo_pro_error.meta_description is defined %}
+                      <div class="text-danger">{{ seo_pro_error.meta_description }}</div>
+                      {% endif %}
+                    </div>
+                  </div>
+                  <div class="form-group{% if seo_pro_error.meta_keyword is defined %} has-error{% endif %}">
+                    <label class="col-sm-2 control-label" for="input-meta-keyword{{ language.language_id }}">{{ entry_seo_pro_meta_keyword }}</label>
+                    <div class="col-sm-10">
+                      <textarea name="manufacturer_description[{{ language.language_id }}][meta_keyword]" rows="5" placeholder="{{ entry_seo_pro_meta_keyword }}" id="input-meta-keyword{{ language.language_id }}" class="form-control">{{ (seo_pro.meta_keyword ?? '')|replace({'"': '&quot;', '<': '&lt;', '>': '&gt;'}) }}</textarea>
+                      {% if seo_pro_error.meta_keyword is defined %}
+                      <div class="text-danger">{{ seo_pro_error.meta_keyword }}</div>
+                      {% endif %}
+                    </div>
+                  </div>
+                </div>
+                {% endfor %}
+              </div>
+              <script type="text/javascript"><!--
+$('#seo-pro-language a:first').tab('show');
+//--></script>
+            </div>]]></add>
+        </operation>
+        <operation error="skip">
+            <ignoreif><![CDATA[summernote/summernote.min.js]]></ignoreif>
+            <search><![CDATA[{{ footer }}]]></search>
+            <add position="before"><![CDATA[<script type="text/javascript" src="view/javascript/summernote/summernote.min.js"></script>
+<link href="view/javascript/summernote/summernote.min.css" rel="stylesheet" />
+<script type="text/javascript" src="view/javascript/summernote/summernote-image-attributes.js"></script>
+<script type="text/javascript" src="view/javascript/summernote/opencart.js"></script>]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/en-gb/catalog/manufacturer.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_name']]]></search>
+            <add position="after"><![CDATA[
+$_['tab_seo_pro_description']        = 'Description';
+$_['entry_seo_pro_description']      = 'Description';
+$_['entry_seo_pro_meta_title']       = 'Meta Tag Title';
+$_['entry_seo_pro_meta_h1']          = 'HTML Tag H1';
+$_['entry_seo_pro_meta_description'] = 'Meta Tag Description';
+$_['entry_seo_pro_meta_keyword']     = 'Meta Tag Keywords';
+$_['error_seo_pro_md_text']          = 'Must be text of at most 255 characters!';
+$_['error_seo_pro_md_description']   = 'The description must be text of at most 65535 bytes!';
+$_['error_seo_pro_md_invalid']       = 'Warning: the descriptions were sent in a wrong form, nothing is saved!';
+$_['error_seo_pro_md_warning']       = 'Warning: Please check the form carefully for errors!';
+$_['error_seo_pro_md_schema']        = 'Warning: the database table for the descriptions of manufacturers is not ready, manufacturers cannot be added, changed or deleted. The reason is in the error log; the module tries again on the next request.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/ru-ru/catalog/manufacturer.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_name']]]></search>
+            <add position="after"><![CDATA[
+$_['tab_seo_pro_description']        = 'Описание';
+$_['entry_seo_pro_description']      = 'Описание';
+$_['entry_seo_pro_meta_title']       = 'Мета-тег Title';
+$_['entry_seo_pro_meta_h1']          = 'HTML-тег H1';
+$_['entry_seo_pro_meta_description'] = 'Мета-тег Description';
+$_['entry_seo_pro_meta_keyword']     = 'Мета-тег Keywords';
+$_['error_seo_pro_md_text']          = 'Текст не длиннее 255 символов!';
+$_['error_seo_pro_md_description']   = 'Описание должно быть текстом не длиннее 65535 байт!';
+$_['error_seo_pro_md_invalid']       = 'Внимание: описания переданы в неверном виде, ничего не сохранено!';
+$_['error_seo_pro_md_warning']       = 'Внимание: проверьте форму на ошибки!';
+$_['error_seo_pro_md_schema']        = 'Внимание: таблица базы данных для описаний производителей не готова, производителей нельзя добавлять, изменять и удалять. Причина записана в журнал ошибок; модуль повторит попытку при следующем запросе.';]]></add>
+        </operation>
+    </file>
+
+    <file path="admin/language/uk-ua/catalog/manufacturer.php" error="skip">
+        <operation error="skip">
+            <search><![CDATA[$_['entry_name']]]></search>
+            <add position="after"><![CDATA[
+$_['tab_seo_pro_description']        = 'Опис';
+$_['entry_seo_pro_description']      = 'Опис';
+$_['entry_seo_pro_meta_title']       = 'Мета-тег Title';
+$_['entry_seo_pro_meta_h1']          = 'HTML-тег H1';
+$_['entry_seo_pro_meta_description'] = 'Мета-тег Description';
+$_['entry_seo_pro_meta_keyword']     = 'Мета-тег Keywords';
+$_['error_seo_pro_md_text']          = 'Текст не довше 255 символів!';
+$_['error_seo_pro_md_description']   = 'Опис має бути текстом не довше 65535 байт!';
+$_['error_seo_pro_md_invalid']       = 'Увага: описи передано в неправильному вигляді, нічого не збережено!';
+$_['error_seo_pro_md_warning']       = 'Увага: перевірте форму на помилки!';
+$_['error_seo_pro_md_schema']        = 'Увага: таблиця бази даних для описів виробників не готова, виробників не можна додавати, змінювати та видаляти. Причину записано до журналу помилок; модуль повторить спробу під час наступного запиту.';]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/model/catalog/manufacturer.php">
+        <operation error="skip">
+            <ignoreif regex="true"><![CDATA[~function getManufacturer\((?:(?!function\s).)*manufacturer_description~s]]></ignoreif>
+            <search><![CDATA[$query = $this->db->query("SELECT * FROM " . DB_PREFIX . "manufacturer m LEFT JOIN " . DB_PREFIX . "manufacturer_to_store m2s ON (m.manufacturer_id = m2s.manufacturer_id) WHERE m.manufacturer_id = '" . (int)$manufacturer_id . "' AND m2s.store_id = '" . (int)$this->config->get('config_store_id') . "'");]]></search>
+            <add position="before"><![CDATA[
+		// SEO Pro: the description in the current language; a manufacturer without it is found as before
+		if ($this->config->get('seo_pro_manufacturer_description_ready')) {
+			$query = $this->db->query("SELECT m.*, m2s.store_id, md.description, md.meta_title, md.meta_h1, md.meta_description, md.meta_keyword FROM " . DB_PREFIX . "manufacturer m LEFT JOIN " . DB_PREFIX . "manufacturer_to_store m2s ON (m.manufacturer_id = m2s.manufacturer_id) LEFT JOIN " . DB_PREFIX . "manufacturer_description md ON (m.manufacturer_id = md.manufacturer_id AND md.language_id = '" . (int)$this->config->get('config_language_id') . "') WHERE m.manufacturer_id = '" . (int)$manufacturer_id . "' AND m2s.store_id = '" . (int)$this->config->get('config_store_id') . "'");
+
+			return $query->row;
+		}
+]]></add>
+        </operation>
+    </file>
+
+    <file path="catalog/controller/product/manufacturer.php">
+        <operation error="skip">
+            <search><![CDATA[$this->document->setTitle($manufacturer_info['name']);]]></search>
+            <add position="after"><![CDATA[
+			// SEO Pro: the meta tags of the manufacturer in the current language; an empty field keeps the core value
+			if ($this->config->get('seo_pro_manufacturer_description_ready')) {
+				if (isset($manufacturer_info['meta_title']) && is_string($manufacturer_info['meta_title']) && $manufacturer_info['meta_title'] !== '') {
+					$this->document->setTitle(Seo_pro_schema::text($manufacturer_info['meta_title']));
+				}
+
+				if (isset($manufacturer_info['meta_description']) && is_string($manufacturer_info['meta_description']) && $manufacturer_info['meta_description'] !== '') {
+					$this->document->setDescription(Seo_pro_schema::text($manufacturer_info['meta_description']));
+				}
+
+				if (isset($manufacturer_info['meta_keyword']) && is_string($manufacturer_info['meta_keyword']) && $manufacturer_info['meta_keyword'] !== '') {
+					$this->document->setKeywords(Seo_pro_schema::text($manufacturer_info['meta_keyword']));
+				}
+			}
+]]></add>
+        </operation>
+        <operation error="skip">
+            <search><![CDATA[$data['heading_title'] = $manufacturer_info['name'];]]></search>
+            <add position="after"><![CDATA[
+			// SEO Pro: a filled H1 replaces the heading ('0' is a filled H1); the description for themes that show it
+			$data['description'] = '';
+
+			if ($this->config->get('seo_pro_manufacturer_description_ready')) {
+				if (isset($manufacturer_info['meta_h1']) && is_string($manufacturer_info['meta_h1']) && $manufacturer_info['meta_h1'] !== '') {
+					$data['heading_title'] = Seo_pro_schema::text($manufacturer_info['meta_h1']);
+				}
+
+				if (isset($manufacturer_info['description']) && is_string($manufacturer_info['description'])) {
+					$data['description'] = html_entity_decode($manufacturer_info['description'], ENT_QUOTES, 'UTF-8');
+				}
+			}
+]]></add>
         </operation>
     </file>
 

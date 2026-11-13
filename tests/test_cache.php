@@ -5,6 +5,8 @@ error_reporting(E_ALL); define('DB_PREFIX', 'oc_');
 if (empty($argv[1])) { fwrite(STDERR, "usage: php test_cache.php <ocmod_sim out dir>\n"); exit(2); }
 $out = rtrim($argv[1], '/');
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_cache.php';
+// OpenCart loads the library with its autoloader
+require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_schema.php';
 
 class Res { public $rows; public $row; public $num_rows; function __construct($rows = []) { $this->rows = $rows; $this->row = $rows[0] ?? []; $this->num_rows = count($rows); } }
 class DB { public $log = [];

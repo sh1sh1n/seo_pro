@@ -1,7 +1,7 @@
 # Free SEO Pro for OpenCart
 Free extension to create clean URLs (also sometimes referred to as RESTful URLs, user-friendly URLs, pretty URLs or search engine-friendly URLs)
 
-[Download extension for OpenCart 3.0.5.1](https://github.com/sh1sh1n/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (this fork, version 1.6.3; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
+[Download extension for OpenCart 3.0.5.1](https://github.com/sh1sh1n/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (this fork, version 1.7; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
 
 ## Using
 1. Make a backup of the files and the database.
@@ -23,11 +23,36 @@ The tab Server of the default store (System → Settings) and of every additiona
 - A value that is not allowed is not saved and is not replaced by another one: the whole form is rejected and the field shows an error. The same happens when a record in the database is wrong: choose a correct value and save.
 - A form that does not send one of the four settings keeps the value the store has.
 
-On the first request after Refresh the module adds the column `main_category` to `product_to_category`. The database user needs the ALTER privilege. Errors are written to the error log, and the module tries again on the next request. Until the column exists the shop keeps working: the main category of a product is not shown and not saved, and the product path is built from the first category of the product.
+## Database changes
+On the first request after Refresh (in the admin or on the storefront) the module checks and, when needed, changes the database:
+
+| Function | Change |
+|---|---|
+| Main category of a product | column `main_category` in `product_to_category` |
+| HTML H1 of products, categories, information pages | column `meta_h1 varchar(255) NOT NULL DEFAULT ''` after `meta_title` in `product_description`, `category_description`, `information_description` |
+| Descriptions of manufacturers | table `manufacturer_description` (`manufacturer_id`, `language_id`, `description`, `meta_title`, `meta_h1`, `meta_description`, `meta_keyword`, primary key `manufacturer_id, language_id`), with the engine and the charset of `manufacturer` |
+
+- The database user needs ALTER and CREATE for the migration, besides the usual SELECT, INSERT, UPDATE and DELETE. Existing columns and tables are not changed and not dropped: a compatible `meta_h1` (varchar of 255 characters or more, or text) and a compatible `manufacturer_description` (for example of ocStore) are used as they are, a missing text column of the table is added. A column or a table that does not fit (another type, another primary key) is a conflict: it is written to the error log and the function stays off.
+- Every function is ready on its own. An error of one function does not turn off the others, and the main category and the SEO addresses keep working. The module tries again on the next request; the version `1.7` is written and the module caches are cleared only when every function is ready. After that no check is made: a column removed by hand later is not detected.
+- Until the column `main_category` exists the main category of a product is not shown and not saved, and the product path is built from the first category of the product.
+- Until H1 of products, categories or information pages is ready, saving and copying of these records in the admin is refused with a message, so that nothing is saved without H1. The storefront shows the name. Until the manufacturer descriptions are ready, adding, editing and deleting manufacturers is refused the same way. Version 1.6.3 saved these records in that case.
+- `ALTER TABLE` of large tables can hold queries for a while. Try the upgrade on a copy of the shop and choose the time.
+- Uninstalling the module keeps the columns, the table and their content.
 
 If PHP runs with `opcache.validate_timestamps=0`, reset OPcache after Refresh. Otherwise PHP keeps running the old files.
 
 Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no longer used and can be deleted.
+
+## HTML H1 and descriptions of manufacturers
+- Products, categories and information pages have the field HTML H1 on the tab General of every language, next to Meta Tag Title. A filled H1 replaces `heading_title` on the storefront, an empty one leaves the name (title). `0` is a filled H1. The limit is 255 characters of the stored text (an entity such as `&amp;` counts as five).
+- Another modification that already adds `meta_h1` to the descriptions is respected: H1 is added to each INSERT of the descriptions that has none, so an extension that changes only the add or only the edit of a record does not lose H1 on the other one.
+- Manufacturers have the tab Description with, for every language, the description (Summernote editor), Meta Tag Title, HTML H1, Meta Tag Description and Meta Tag Keywords. The storefront uses Meta Tag Title for the title (the name when it is empty), the meta tags, H1 for `heading_title` and passes the description to the template as `description`. The limits are 65535 bytes for the description and 255 characters for the other fields.
+- A form or an import that does not send H1 keeps the saved H1 of each language it sends; the languages themselves are saved as the core does (a language that is not sent is removed from the record). For manufacturers only the languages and fields that are sent are changed. An empty value clears the field. A value of a wrong type, an invalid UTF-8 text or a too long value rejects the whole save before anything is written.
+- The texts are stored the way the core stores a form, escaped once (`"` as `&quot;`, `<` as `&lt;`, `&` as `&amp;`). An import through the model that sends raw text is brought to this form, entities that are already there are kept; the limits count the stored form, so `"` counts as six characters. The HTML of a manufacturer description is stored escaped too and is shown as HTML on the storefront. The admin forms and the storefront (H1, title, meta of manufacturers) escape a raw value that was written to the database by another tool, so it is shown as text.
+- The texts are per language, not per store: the descriptions of a manufacturer are the same in every store. A manufacturer without a translation in the current language shows its name and no description. A new language gets an empty H1; the descriptions of manufacturers are not copied to it, and rows of a deleted language stay in `manufacturer_description`.
+- Languages of the admin texts: en-gb, ru-ru, uk-ua (a missing language pack is skipped).
+- The storefront templates are not changed. H1 works in templates that print `heading_title`. A theme that also uses `heading_title` for `alt`/`title` of images or Open Graph gets H1 there too. The description of a manufacturer is shown only by a template that prints `description`: `manufacturer_info.twig` of theme `default` does not. In OCTemplates Deals the SEO title templates of the theme, when they are turned on in its settings, replace the title and meta description set by the module.
+- Blog extensions and the Quickstart (demo import) of Deals are not supported: their SQL is not checked against the new columns. Do not run Quickstart on a shop with data.
 
 ## Behaviour
 - Product links keep all their parameters. The module manages only `product_id` and `path`. Duplicate pages such as `/tyre.html?foo=1` are covered by `rel="canonical"` on the product page.
@@ -44,6 +69,13 @@ Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no lo
 
 ## Limitations
 - Cart in theme `default`: after removing a product the cart page reloads, and the checkout page goes to the cart, also when these pages have SEO keywords. Other themes are not changed. In the OCTemplates Deals theme the cart page reloads itself only if the cart keyword is `cart` or `checkout` and the shop is not installed in a subdirectory.
+
+## Upgrade to 1.7
+1. Back up the files, the database, the installed modifications and the archive of the version in use.
+2. Install the new archive, press Refresh, reset OPcache when `opcache.validate_timestamps=0`.
+3. Open any page and check the error log: no new line `SEO Pro schema` means every function is ready. Otherwise fix the cause (privileges, a conflicting column or table) and open a page again.
+
+Rollback to 1.6.3: install its archive and press Refresh. H1 and the descriptions stay in the database and are not shown. A later upgrade to 1.7 checks the existing structures again and uses them.
 
 ## Upgrade to 1.6.3
 Records of Design → SEO URL with another kind of query (for example `blog_id=3` of a blog extension) are no longer opened by the module. Before the upgrade list them, nothing is changed in the database:

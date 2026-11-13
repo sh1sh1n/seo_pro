@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs every test. usage: OC_DIR=/path/to/opencart-3.0.5.1/upload [PHP=php] [PORT=8765] sh tests/run.sh
+# Runs every test. usage: OC_DIR=/path/to/opencart-3.0.5.1/upload [DEALS_DIR=/path/to/deals/upload] [PHP=php] [PORT=8765] sh tests/run.sh
 # Exit code 0 only when every part passed.
 set -u
 : "${OC_DIR:?set OC_DIR to opencart-3.0.5.1/upload}"
@@ -48,5 +48,10 @@ part 'cache resets' "$PHP" "$ROOT/tests/test_cache.php" "$TMP/out"
 part 'product categories' "$PHP" "$ROOT/tests/test_product_categories.php" "$TMP/out"
 part 'seo_url audit' "$PHP" "$ROOT/tests/test_audit.php"
 part 'store settings' env OC_DIR="$OC_DIR" "$PHP" "$ROOT/tests/test_store_settings.php" "$TMP/out"
+part 'HTML H1 of products, categories, information pages' env OC_DIR="$OC_DIR" "$PHP" "$ROOT/tests/test_h1.php" "$TMP/out"
+part 'descriptions of manufacturers' env OC_DIR="$OC_DIR" "$PHP" "$ROOT/tests/test_manufacturer_description.php" "$TMP/out"
+part 'storefront: H1, meta, manufacturer description' "$PHP" "$ROOT/tests/test_storefront.php" "$TMP/out"
+part 'admin forms rendered by Twig' env OC_DIR="$OC_DIR" "$PHP" "$ROOT/tests/test_content_forms.php" "$TMP/out"
+part 'OCMOD with other modifications' env OC_DIR="$OC_DIR" DEALS_DIR="${DEALS_DIR:-}" PHP="$PHP" "$PHP" "$ROOT/tests/test_ocmod.php"
 
 exit $status
