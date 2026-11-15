@@ -21,10 +21,13 @@ mkdir "$TMP/core" && cp -R "$OC_DIR/." "$TMP/core/" && cp -R "$ROOT/seo_pro_oc3.
 part 'ocmod' "$PHP" "$ROOT/tests/ocmod_sim.php" --check=install.xml "$TMP/core" "$TMP/out" "$OC_DIR/system/modification.xml" "$ROOT/seo_pro_oc3.ocmod/install.xml"
 part 'php -l modified core files' sh -c "for f in \$(find '$TMP/out' -name '*.php'); do '$PHP' -l \"\$f\" > /dev/null || exit 1; done"
 
+# A synthetic extension that adds its own kinds of seo_url.query to the router of the core: cases_foreign.php runs the changed file
+part 'ocmod: synthetic extension with its own SEO URLs' "$PHP" "$ROOT/tests/ocmod_sim.php" "$TMP/core" "$TMP/foreign" "$OC_DIR/system/modification.xml" "$ROOT/tests/foreign.ocmod.xml" "$ROOT/seo_pro_oc3.ocmod/install.xml"
+
 # The controller cases pass only when the server started here is alive, answers with the id of this run
 # and the run reports that it has finished. Another server on the port, even one answering HTTP 200, is a failure.
 RUN_ID="$$x$(date +%s)"
-OC_DIR=$OC_DIR SEO_PRO_RUN_ID=$RUN_ID "$PHP" -S "127.0.0.1:$PORT" -t "$ROOT/tests" > "$TMP/server.log" 2>&1 &
+OC_DIR=$OC_DIR SEO_PRO_RUN_ID=$RUN_ID SEO_PRO_FOREIGN_DIR="$TMP/foreign" "$PHP" -S "127.0.0.1:$PORT" -t "$ROOT/tests" > "$TMP/server.log" 2>&1 &
 SERVER=$!
 controller() {
 	i=0
@@ -34,13 +37,15 @@ controller() {
 		i=$((i + 1)); [ $i -ge 50 ] && { echo "port $PORT does not answer as the server of this run"; return 1; }
 		sleep 0.1
 	done
-	code=$(curl -sS --max-time 300 -o "$TMP/cases.txt" -w '%{http_code}' "http://127.0.0.1:$PORT/cases.php") || return 1
+	code=$(curl -sS --max-time 300 -o "$TMP/cases.txt" -w '%{http_code}' "http://127.0.0.1:$PORT/$1") || return 1
 	[ "$code" = 200 ] || { echo "HTTP $code"; grep -v -E '^(ok |--|$)' "$TMP/cases.txt"; return 1; }
 	kill -0 "$SERVER" 2>/dev/null || { echo 'the PHP server died during the run'; return 1; }
-	grep -q "^seo_pro cases finished $RUN_ID\$" "$TMP/cases.txt" || { echo 'the answer is not a finished run of cases.php'; return 1; }
+	grep -q "^seo_pro cases finished $RUN_ID\$" "$TMP/cases.txt" || { echo "the answer is not a finished run of $1"; return 1; }
 	grep -E '^notices: 0, failed: 0$' "$TMP/cases.txt"
 }
-part 'controller (cases.php)' controller
+part 'controller (cases.php)' controller cases.php
+part 'controller, foreign records, modified core (cases_foreign.php)' controller 'cases_foreign.php?core=patched'
+part 'controller, foreign records, unmodified core (cases_foreign.php)' controller 'cases_foreign.php?core=stock'
 kill "$SERVER" 2>/dev/null; SERVER=
 
 part 'schema' "$PHP" "$ROOT/tests/test_schema.php"

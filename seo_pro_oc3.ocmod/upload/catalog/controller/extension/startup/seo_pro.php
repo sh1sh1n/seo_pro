@@ -18,6 +18,18 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	// The keywords taken from the map while an address is resolved or built; null when they are not collected
 	private $hits = null;
 
+	// The router of the core with the modifications of other extensions: false until it is asked for, null when it cannot be loaded
+	private $core = false;
+
+	// Links the router of the core was asked for in this request: the address, or false when the core has none for the link
+	private $core_links = array();
+
+	// rewrite() of the core is running
+	private $core_busy = false;
+
+	// The ids the core itself reads from seo_url.query
+	private $own_keys = array('category_id', 'product_id', 'manufacturer_id', 'information_id');
+
 	// Routes whose ids are turned into aliases, and the parameters each of them owns
 	private $page_routes = array(
 		'product/product'           => array('path', 'product_id'),
@@ -81,6 +93,11 @@ class ControllerExtensionStartupSeoPro extends Controller {
 				$page = $this->resolveAddress($route);
 			}
 
+			// An address with a record of another extension is a page only when the router of the core, as modified, says so
+			if ($page !== null && isset($page['core'])) {
+				$page = $this->resolveByCore($route);
+			}
+
 			// Nothing is written to the request before the whole address is resolved,
 			// and the ids a visitor has sent never choose the page
 			if ($page === null) {
@@ -92,7 +109,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 				$this->request->get['route'] = $page['route'];
 
-				if ($page['route'] === 'product/product' && !isset($this->request->get['path'])) {
+				if ($page['route'] === 'product/product' && isset($this->request->get['product_id']) && !isset($this->request->get['path'])) {
 					$path = $this->getPathByProduct($this->request->get['product_id']);
 					if ($path) $this->request->get['path'] = $path;
 				}
@@ -109,7 +126,8 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	/**
 	 * The page of an address. Sets $this->stale when a keyword of the address shows that the map is out of date.
 	 *
-	 * @return array|null array('route' => string, 'params' => array)
+	 * @return array|null array('route' => string, 'params' => array),
+	 *                    or array('core' => true): the address has a record of another extension and is left to the router of the core
 	 */
 	private function resolveAddress($route) {
 		$this->stale = false;
@@ -151,7 +169,13 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			}
 		}
 
-		$page = ($queries === null) ? null : $this->resolveQueries($queries);
+		if ($queries === null) {
+			$page = null;
+		} elseif ($this->hasForeign($queries)) {
+			$page = array('core' => true);
+		} else {
+			$page = $this->resolveQueries($queries);
+		}
 
 		$resolved = ($queries !== null);
 
@@ -245,6 +269,16 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		$queries = array();
 		$postfix = false;
+
+		// The store has records of other extensions, and the link has parameters one of them may own.
+		// Asked before the keyword of the route itself: such an extension may build "/list/item" from a route and an id
+		if ($data && !empty($this->cache_data['foreign']) && !isset($this->page_routes[$route])) {
+			$seo_url = $this->rewriteByCore($base, $route, $data);
+
+			if ($seo_url !== null) {
+				return $seo_url;
+			}
+		}
 
 		if (isset($this->page_routes[$route])) {
 			foreach ($data as $key => $value) {
@@ -408,7 +442,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	}
 
 	/**
-	 * The kinds of seo_url.query the module supports. The whole string must match, nothing is cut or corrected.
+	 * The kinds of seo_url.query the module opens itself. The whole string must match, nothing is cut or corrected.
 	 *
 	 * @return array|null array('type' => 'category_id'|'product_id'|'manufacturer_id'|'information_id', 'id' => string)
 	 *                    or array('type' => 'route', 'route' => string); null for every other string
@@ -428,6 +462,187 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		}
 
 		return null;
+	}
+
+	/**
+	 * A record of another extension: not a record of the module, and not one the unmodified core reads as its own id.
+	 * A wrong record of the module ("product_id=0", "product_id=1x") and an empty query are not foreign, they answer 404.
+	 */
+	private function isForeign($query) {
+		if (!is_string($query) || $query === '' || $this->classifyQuery($query) !== null) {
+			return false;
+		}
+
+		$part = explode('=', $query, 2);
+
+		return !in_array($part[0], $this->own_keys, true);
+	}
+
+	/**
+	 * @return bool true when a query is foreign and every other one is a record of the module or foreign
+	 */
+	private function hasForeign(array $queries) {
+		$foreign = false;
+
+		foreach ($queries as $query) {
+			if ($this->isForeign($query)) {
+				$foreign = true;
+			} elseif ($this->classifyQuery($query) === null) {
+				return false;
+			}
+		}
+
+		return $foreign;
+	}
+
+	/**
+	 * ControllerStartupSeoUrl with the modifications of other extensions, loaded the way the loader of the core does.
+	 * Built only in a store that has foreign records.
+	 *
+	 * @return object|null
+	 */
+	private function getCore() {
+		if ($this->core === false) {
+			$this->core = null;
+
+			if (!class_exists('ControllerStartupSeoUrl', false)) {
+				$file = DIR_APPLICATION . 'controller/startup/seo_url.php';
+
+				if (function_exists('modification')) {
+					$file = modification($file);
+				}
+
+				if (is_file($file)) {
+					include_once($file);
+				}
+			}
+
+			if (class_exists('ControllerStartupSeoUrl', false)) {
+				$this->core = new ControllerStartupSeoUrl($this->registry);
+			}
+		}
+
+		return $this->core;
+	}
+
+	/**
+	 * The page the router of the core gives to an address. The core sees the address as it was sent and nothing else:
+	 * the parameters of the visitor are put back after it, under the ones the core has set.
+	 *
+	 * @return array|null array('route' => string, 'params' => array)
+	 */
+	private function resolveByCore($route) {
+		$core = $this->getCore();
+
+		if ($core === null || !is_callable(array($core, 'index'))) {
+			return null;
+		}
+
+		$get = $this->request->get;
+		$url = $this->registry->get('url');
+
+		// index() of the core adds its rewrite() to the url class: every link would then cost SQL queries.
+		// It gets an object that ignores this call and passes every other one to the url class
+		$this->registry->set('url', new class($url) {
+			private $url;
+
+			public function __construct($url) {
+				$this->url = $url;
+			}
+
+			public function addRewrite($rewrite) {
+			}
+
+			public function __call($method, $args) {
+				return call_user_func_array(array($this->url, $method), $args);
+			}
+		});
+
+		$this->request->get = array('_route_' => $route);
+
+		try {
+			$core->index();
+
+			$params = $this->request->get;
+		} finally {
+			$this->request->get = $get;
+			$this->registry->set('url', $url);
+		}
+
+		if (!is_array($params) || !isset($params['route']) || !is_string($params['route']) || $params['route'] === 'error/not_found') {
+			return null;
+		}
+
+		// The unmodified core puts the record itself ("blog_id=3") into the route: not a page
+		$item = $this->classifyQuery($params['route']);
+
+		if ($item === null || $item['type'] !== 'route') {
+			return null;
+		}
+
+		unset($params['_route_'], $params['route']);
+
+		return array('route' => $item['route'], 'params' => $params);
+	}
+
+	/**
+	 * The address rewrite() of the core, as modified, builds for a link. The core chooses the keywords,
+	 * the parameters it has left are written the way the module writes them.
+	 * The core does not get "path": it reads it as categories in a link of any route.
+	 *
+	 * @param string $base  the address of the store
+	 * @param string $route a route that is not a page of the module
+	 * @param array  $data  the parameters of the link without the route
+	 *
+	 * @return string|null null when the core has no address for the link
+	 */
+	private function rewriteByCore($base, $route, array $data) {
+		$params = array_diff_key($data, array('path' => ''));
+
+		// rewrite() of a modification has asked for a link itself
+		if (!$params || $this->core_busy) {
+			return null;
+		}
+
+		$link = $base . 'index.php?route=' . $route . '&amp;' . http_build_query($params, '', '&amp;');
+
+		$key = $this->cache_language_id . ' ' . $link . (isset($data['path']) ? ' ' . http_build_query(array('path' => $data['path'])) : '');
+
+		if (!isset($this->core_links[$key])) {
+			$this->core_links[$key] = false;
+
+			$core = $this->getCore();
+
+			$component = parse_url(str_replace('&amp;', '&', $link));
+
+			// rewrite() of the core reads the scheme and the host of the link without a check
+			if ($core !== null && is_callable(array($core, 'rewrite')) && isset($component['scheme']) && isset($component['host'])) {
+				$this->core_busy = true;
+
+				try {
+					$seo_url = $core->rewrite($link);
+				} finally {
+					$this->core_busy = false;
+				}
+
+				if (is_string($seo_url) && $seo_url !== '' && $seo_url !== $link) {
+					$part = explode('?', $seo_url, 2);
+
+					$rest = array();
+
+					if (isset($part[1])) {
+						parse_str(str_replace('&amp;', '&', $part[1]), $rest);
+					}
+
+					// In the order of the link; a parameter the modification has added comes last
+					$rest = array_intersect_key($data, $rest + array('path' => '')) + $rest;
+
+					$this->core_links[$key] = $part[0] . ($rest ? '?' . http_build_query($rest, '', '&amp;') : '');
+				}
+			}
+		}
+
+		return ($this->core_links[$key] === false) ? null : $this->core_links[$key];
 	}
 
 	/**
@@ -510,12 +725,17 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$cache_data = $rebuild ? null : $this->cache->get($cache_key);
 
 		// A record added past the models of the core (an import, another extension) changes MAX(seo_url_id)
-		if (!is_array($cache_data) || !isset($cache_data['max_id']) || (int)$cache_data['max_id'] !== $this->max_id) {
+		// A map of 1.7.2 does not say whether the store has records of other extensions
+		if (!is_array($cache_data) || !isset($cache_data['max_id']) || !isset($cache_data['foreign']) || (int)$cache_data['max_id'] !== $this->max_id) {
 			$query = $this->db->query("SELECT LOWER(`keyword`) AS 'keyword', `query` FROM " . DB_PREFIX . "seo_url WHERE store_id = '" . $store_id . "' AND language_id = '" . $language_id . "' ORDER BY seo_url_id");
 
-			$cache_data = array('max_id' => $this->max_id, 'keywords' => array(), 'queries' => array());
+			$cache_data = array('max_id' => $this->max_id, 'foreign' => false, 'keywords' => array(), 'queries' => array());
 
 			foreach ($query->rows as $row) {
+				if (!$cache_data['foreign'] && $this->isForeign((string)$row['query'])) {
+					$cache_data['foreign'] = true;
+				}
+
 				// The keyword already belongs to an earlier query: this query keeps a plain link
 				if (isset($cache_data['keywords'][$row['keyword']])) {
 					continue;

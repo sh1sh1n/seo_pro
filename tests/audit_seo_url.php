@@ -1,17 +1,21 @@
 <?php
-// Read-only check before the upgrade to 1.6.3: lists the seo_url records the module no longer opens (they answer 404).
+// Read-only check: lists the seo_url records the module does not open itself.
+//   foreign      a record of another extension ("blog_id=3"). Since 1.8 it is passed to the router of the core,
+//                catalog/controller/startup/seo_url.php: it opens a page when a modification of that file reads it, otherwise it answers 404.
+//   unsupported  a wrong record of the module ("product_id=0") or an empty query: it answers 404.
 // The records are classified by the controller itself. Nothing is written to the database.
 // usage: php audit_seo_url.php <path to the config.php of the shop>
 //    or: php audit_seo_url.php --tsv <file>   (lines "seo_url_id<TAB>store_id<TAB>language_id<TAB>query<TAB>keyword", for example an export)
 //        TSV: UTF-8, a BOM is allowed, LF or CRLF. Empty lines are skipped. The first line may be the header "seo_url_id<TAB>...".
 //        Every other line needs five fields with numeric ids: one wrong line stops the check with exit code 2, it is never skipped.
-// Exit code 0: every record is supported; 1: there are unsupported records; 2: the check could not run.
+// Exit code 0: the module opens every record itself; 1: there are foreign or unsupported records; 2: the check could not run.
 error_reporting(E_ALL);
 abstract class Controller {}
 // The shop loads the library with its autoloader: the controller takes the rule of an id from it
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_schema.php';
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/catalog/controller/extension/startup/seo_pro.php';
 $classify = new ReflectionMethod('ControllerExtensionStartupSeoPro', 'classifyQuery'); if (PHP_VERSION_ID < 80100) $classify->setAccessible(true);
+$foreign = new ReflectionMethod('ControllerExtensionStartupSeoPro', 'isForeign'); if (PHP_VERSION_ID < 80100) $foreign->setAccessible(true);
 $controller = (new ReflectionClass('ControllerExtensionStartupSeoPro'))->newInstanceWithoutConstructor();
 
 $rows = [];
@@ -41,8 +45,8 @@ if (($argv[1] ?? '') === '--tsv' && isset($argv[2]) && is_file($argv[2])) {
 $kinds = []; $bad = 0;
 foreach ($rows as $row) {
 	$item = $classify->invoke($controller, (string)$row['query']);
-	$kind = $item === null ? 'unsupported' : $item['type']; $kinds[$kind] = ($kinds[$kind] ?? 0) + 1;
-	if ($item === null) { $bad++; echo "unsupported\tseo_url_id={$row['seo_url_id']}\tstore_id={$row['store_id']}\tlanguage_id={$row['language_id']}\tquery=" . json_encode($row['query'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\tkeyword=" . json_encode($row['keyword'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n"; }
+	$kind = $item === null ? ($foreign->invoke($controller, (string)$row['query']) ? 'foreign' : 'unsupported') : $item['type']; $kinds[$kind] = ($kinds[$kind] ?? 0) + 1;
+	if ($item === null) { $bad++; echo "$kind\tseo_url_id={$row['seo_url_id']}\tstore_id={$row['store_id']}\tlanguage_id={$row['language_id']}\tquery=" . json_encode($row['query'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\tkeyword=" . json_encode($row['keyword'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n"; }
 }
 ksort($kinds);
 echo 'records: ' . count($rows) . '; ' . json_encode($kinds) . "\n";

@@ -9,6 +9,11 @@ define('DB_PREFIX', 'oc_');
 require $OC . 'system/helper/utf8.php';
 require $OC . 'system/library/url.php';
 require $OC . 'system/library/request.php';
+// The module loads the router of the core the way the core loads a controller: the file changed by OCMOD when there is one.
+// SEO_PRO_MODIFICATION: a directory with the files ocmod_sim.php has written, set by the case that needs a modified core
+define('DIR_APPLICATION', $OC . 'catalog/');
+define('DIR_MODIFICATION', defined('SEO_PRO_MODIFICATION') ? rtrim(SEO_PRO_MODIFICATION, '/') . '/' : $OC . 'system/storage/modification/');
+function modification($filename) { $file = DIR_MODIFICATION . 'catalog/' . substr($filename, strlen(DIR_APPLICATION)); return is_file($file) ? $file : $filename; }
 
 class Action { public $route; function __construct($r) { $this->route = $r; } }
 class Registry { private $d = []; function get($k) { return $this->d[$k] ?? null; } function set($k, $v) { $this->d[$k] = $v; } }
@@ -26,6 +31,13 @@ class DB {
 	function escape($s) { return addslashes($s); }
 	function query($sql) {
 		$this->log[] = $sql;
+		// The router of the core: a keyword of any language of the store, a query of the current language
+		if (preg_match("~^SELECT \* FROM oc_seo_url WHERE keyword = '(.*)' AND store_id = '(\d+)'$~", $sql, $m)) {
+			foreach ($this->seo as $i => $row) if ($row[3] === stripslashes($m[1]) && $row[0] == $m[2]) return new Res([['seo_url_id' => $i + 1, 'store_id' => $row[0], 'language_id' => $row[1], 'query' => $row[2], 'keyword' => $row[3]]]); return new Res([]);
+		}
+		if (preg_match("~^SELECT \* FROM oc_seo_url WHERE `query` = '(.*)' AND store_id = '(\d+)' AND language_id = '(\d+)'$~", $sql, $m)) {
+			foreach ($this->seo as $i => $row) if ($row[2] === stripslashes($m[1]) && $row[0] == $m[2] && $row[1] == $m[3]) return new Res([['seo_url_id' => $i + 1, 'store_id' => $row[0], 'language_id' => $row[1], 'query' => $row[2], 'keyword' => $row[3]]]); return new Res([]);
+		}
 		if (strpos($sql, 'SELECT MAX(seo_url_id) AS max_id FROM oc_seo_url') === 0) return new Res([['max_id' => $this->seo ? max(array_keys($this->seo)) + 1 : null]]);
 		if (preg_match("~FROM oc_seo_url WHERE store_id = '(\d+)' AND language_id = '(\d+)' AND keyword IN \((.*)\) ORDER BY seo_url_id$~", $sql, $m)) {
 			$in = array_map(fn($k) => stripslashes(substr($k, 1, -1)), explode(', ', $m[3]));
@@ -92,8 +104,8 @@ function run($uri, $method = 'GET', $opts = []) {
 }
 function req($uri, $method = 'GET', $config = [], $server = [], $seo = []) { return run($uri, $method, ['config' => $config, 'server' => $server, 'seo' => $seo])[0]; }
 function link_($route, $args = '', $config = [], $seo = []) { [$r, $c] = boot(['config' => $config, 'seo' => $seo]); $c->index(); return $r->get('url')->link($route, $args); }
-// SQL of the request, by kind
-function sql($r, $kind) { $re = ['map' => "~FROM oc_seo_url WHERE store_id = '\d+' AND language_id = '\d+' ORDER BY~", 'fallback' => '~FROM oc_seo_url WHERE keyword~', 'max' => '~SELECT MAX\(seo_url_id\)~', 'verify' => '~AND keyword IN~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
+// SQL of the request, by kind. 'core': the queries of the router of the core and of its modifications
+function sql($r, $kind) { $re = ['map' => "~FROM oc_seo_url WHERE store_id = '\d+' AND language_id = '\d+' ORDER BY~", 'fallback' => '~^SELECT `query`.* FROM oc_seo_url WHERE keyword~', 'core' => '~^SELECT \* FROM oc_seo_url~', 'max' => '~SELECT MAX\(seo_url_id\)~', 'verify' => '~AND keyword IN~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
 // Follows the redirects of a GET request. Returns [number of redirects, last result]; more than 5 redirects is a loop.
 function follow($uri, $opts = []) {
 	for ($n = 0; $n <= 5; $n++) {
@@ -105,6 +117,8 @@ function follow($uri, $opts = []) {
 }
 // The parameters the visitor sent, as PHP parses them
 function params($x) { $g = $x['get'] ?? []; unset($g['route'], $g['path'], $g['product_id'], $g['manufacturer_id'], $g['information_id']); return json_decode(json_encode($g), true); }
+// The index in DB::$seo of a keyword of store 0, language 1
+function row($db, $keyword) { foreach ($db->seo as $i => $row) if ($row[0] == 0 && $row[1] == 1 && $row[3] === $keyword) return $i; throw new Exception("no keyword $keyword"); }
 // A new request: the groups of paths read by the previous one are forgotten
 function new_request() { $p = new ReflectionProperty('ControllerExtensionStartupSeoPro', 'path_groups'); if (PHP_VERSION_ID < 80100) $p->setAccessible(true); $p->setValue(null, []); }
 function call($c, $method, ...$args) { $m = new ReflectionMethod($c, $method); if (PHP_VERSION_ID < 80100) $m->setAccessible(true); return $m->invoke($c, ...$args); }

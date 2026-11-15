@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Not a part of the module. A synthetic extension for the tests: it adds its own kinds of seo_url.query to the router
+     of the core the way blog extensions do, in index() and in rewrite() of catalog/controller/startup/seo_url.php.
+     - note_id=N: the page extension/notes/note;
+     - note_topic_id=N: nested topics, the parameter of the links is topic_path=1_2, the page extension/notes/topic;
+     - offer_id=N: follows the keyword of the route extension/notes/offers, the page extension/notes/offer. -->
+<modification>
+    <name>Synthetic notes</name>
+    <code>seo_pro_test_notes</code>
+    <version>1</version>
+    <author>tests</author>
+
+    <file path="catalog/controller/startup/seo_url.php">
+        <operation>
+            <search><![CDATA[if ($url[0] == 'information_id') {]]></search>
+            <add position="before"><![CDATA[
+					if ($url[0] == 'note_id') {
+						$this->request->get['note_id'] = $url[1];
+					}
+
+					if ($url[0] == 'note_topic_id') {
+						if (!isset($this->request->get['topic_path'])) {
+							$this->request->get['topic_path'] = $url[1];
+						} else {
+							$this->request->get['topic_path'] .= '_' . $url[1];
+						}
+					}
+
+					if ($url[0] == 'offer_id') {
+						$this->request->get['offer_id'] = $url[1];
+					}
+]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[if ($query->row['query'] && $url[0] != 'information_id']]></search>
+            <add position="replace"><![CDATA[if ($query->row['query'] && $url[0] != 'note_id' && $url[0] != 'note_topic_id' && $url[0] != 'offer_id' && $url[0] != 'information_id']]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[if (!isset($this->request->get['route'])) {]]></search>
+            <add position="before"><![CDATA[
+			if (isset($this->request->get['offer_id']) && isset($this->request->get['route']) && $this->request->get['route'] == 'extension/notes/offers') {
+				$this->request->get['route'] = 'extension/notes/offer';
+			}
+
+			if (!isset($this->request->get['route'])) {
+				if (isset($this->request->get['note_id'])) {
+					$this->request->get['route'] = 'extension/notes/note';
+				} elseif (isset($this->request->get['topic_path'])) {
+					$this->request->get['route'] = 'extension/notes/topic';
+				}
+			}
+]]></add>
+        </operation>
+        <operation>
+            <search><![CDATA[} elseif ($key == 'path') {]]></search>
+            <add position="before"><![CDATA[
+				} elseif ($data['route'] == 'extension/notes/note' && $key == 'note_id') {
+					$query = $this->db->query("SELECT * FROM " . DB_PREFIX . "seo_url WHERE `query` = 'note_id=" . (int)$value . "' AND store_id = '" . (int)$this->config->get('config_store_id') . "' AND language_id = '" . (int)$this->config->get('config_language_id') . "'");
+
+					if ($query->num_rows && $query->row['keyword']) {
+						$url .= '/' . $query->row['keyword'];
+
+						unset($data[$key]);
+					}
+				} elseif (($data['route'] == 'extension/notes/note' || $data['route'] == 'extension/notes/topic') && $key == 'topic_path') {
+					$topics = '';
+
+					foreach (explode('_', $value) as $topic) {
+						$query = $this->db->query("SELECT * FROM " . DB_PREFIX . "seo_url WHERE `query` = 'note_topic_id=" . (int)$topic . "' AND store_id = '" . (int)$this->config->get('config_store_id') . "' AND language_id = '" . (int)$this->config->get('config_language_id') . "'");
+
+						if ($query->num_rows && $query->row['keyword']) {
+							$topics .= '/' . $query->row['keyword'];
+						} else {
+							$topics = '';
+
+							break;
+						}
+					}
+
+					if ($topics) {
+						$url .= $topics;
+
+						unset($data[$key]);
+					}
+				} elseif ($data['route'] == 'extension/notes/offer' && $key == 'offer_id') {
+					$list = $this->db->query("SELECT * FROM " . DB_PREFIX . "seo_url WHERE `query` = 'extension/notes/offers' AND store_id = '" . (int)$this->config->get('config_store_id') . "' AND language_id = '" . (int)$this->config->get('config_language_id') . "'");
+					$query = $this->db->query("SELECT * FROM " . DB_PREFIX . "seo_url WHERE `query` = 'offer_id=" . (int)$value . "' AND store_id = '" . (int)$this->config->get('config_store_id') . "' AND language_id = '" . (int)$this->config->get('config_language_id') . "'");
+
+					if ($list->num_rows && $list->row['keyword'] && $query->num_rows && $query->row['keyword']) {
+						$url .= '/' . $list->row['keyword'] . '/' . $query->row['keyword'];
+
+						unset($data[$key]);
+					}
+]]></add>
+        </operation>
+    </file>
+</modification>

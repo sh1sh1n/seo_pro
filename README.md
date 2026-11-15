@@ -1,7 +1,7 @@
 # Free SEO Pro for OpenCart
 Free extension to create clean URLs (also sometimes referred to as RESTful URLs, user-friendly URLs, pretty URLs or search engine-friendly URLs)
 
-[Download extension for OpenCart 3.0.5.1](https://github.com/sh1sh1n/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (this fork, version 1.7.2; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
+[Download extension for OpenCart 3.0.5.1](https://github.com/sh1sh1n/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (this fork, version 1.8; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
 
 ## Using
 1. Make a backup of the files and the database.
@@ -52,7 +52,7 @@ Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no lo
 - The texts are per language, not per store: the descriptions of a manufacturer are the same in every store. A manufacturer without a translation in the current language shows its name and no description. A new language gets an empty H1; the descriptions of manufacturers are not copied to it, and rows of a deleted language stay in `manufacturer_description`.
 - Languages of the admin texts: en-gb, ru-ru, uk-ua (a missing language pack is skipped).
 - The storefront templates are not changed. H1 works in templates that print `heading_title`. A theme that also uses `heading_title` for `alt`/`title` of images or Open Graph gets H1 there too. The description of a manufacturer is shown only by a template that prints `description`: `manufacturer_info.twig` of theme `default` does not. In OCTemplates Deals the SEO title templates of the theme, when they are turned on in its settings, replace the title and meta description set by the module.
-- Blog extensions and the Quickstart (demo import) of Deals are not supported: their SQL is not checked against the new columns. Do not run Quickstart on a shop with data.
+- HTML H1 and the descriptions are not added to the records of blog extensions. The SQL of blog extensions and of the Quickstart (demo import) of Deals is not checked against the new columns. Do not run Quickstart on a shop with data. The addresses of such extensions are a separate matter, see Behaviour.
 
 ## Behaviour
 - Product links keep all their parameters. The module manages only `product_id` and `path`. Duplicate pages such as `/tyre.html?foo=1` are covered by `rel="canonical"` on the product page.
@@ -60,7 +60,15 @@ Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no lo
 - The postfix belongs to addresses of products, manufacturers and information pages. Category addresses end with `/` and keep the keyword as it is, so a category keyword may end with the postfix. `/cat.html` is the keyword `cat` with the postfix, `/cat.html/` is the category with the keyword `cat.html`. Only when no keyword `cat` exists, `/cat.html` is looked up as the whole keyword `cat.html`.
 - Product paths are built from the table `category_path`. If category paths in links are wrong, press Repair (Rebuild) in Catalog → Categories.
 - Links to actions (for example `product/product/write`) do not get the alias of the product, category, manufacturer or information page. A route that has its own keyword in Design → SEO URL, an action route included, gets that keyword, and the keyword opens this route with every method, POST included.
-- The module opens a record of Design → SEO URL only when its query is `category_id=N`, `product_id=N`, `manufacturer_id=N`, `information_id=N` (N from 1 to 2147483647, without leading zeros) or a route such as `information/contact`. An address is one or more different categories, categories and one product, one product, one manufacturer, one information page or one route. Every other record or combination answers 404, and parameters in the address (`?product_id=1`, `?route=...`) never choose the page of an SEO address. Addresses `index.php?route=...` work as in the core.
+- The module itself opens a record of Design → SEO URL only when its query is `category_id=N`, `product_id=N`, `manufacturer_id=N`, `information_id=N` (N from 1 to 2147483647, without leading zeros) or a route such as `information/contact`. An address is one or more different categories, categories and one product, one product, one manufacturer, one information page or one route. Every other combination of these records answers 404, and parameters in the address (`?product_id=1`, `?route=...`) never choose the page of an SEO address. Addresses `index.php?route=...` work as in the core.
+- Records of other extensions (a blog, a theme: for example `blog_id=3`) are left to the router of the core, `catalog/controller/startup/seo_url.php`, with the modifications other extensions have made to it. The module has no list of such extensions and no setting for this:
+  - A foreign record is a record with a non-empty query that is none of the kinds above and does not start with `category_id=`, `product_id=`, `manufacturer_id=` or `information_id=`. A wrong record of the module (`product_id=0`, `product_id=1x`) and an empty query are not foreign: they answer 404, also next to a foreign record.
+  - An address made of keywords with at least one foreign record is given to `index()` of the core as it was sent, with the postfix and without the parameters of the visitor. It is a page when the core sets a route (`extension/blog/article`). The unmodified core does not read a foreign record, so without a modification that does the address answers 404. The parameters of the visitor are put back under the ones the core has set.
+  - A link to a route that is not a page of the module, with parameters other than `path`, is given to `rewrite()` of the core. When the core returns an address, it is used, also when the route has a keyword of its own: the parameters the core has left are written the way the module writes them, and `path` stays a parameter. Otherwise the link is built as before. Addresses built by the core have no postfix and no trailing slash.
+  - Products, categories, manufacturers, information pages, the home page and links without parameters are never given to the core.
+  - The canonical redirect uses the same links: `index.php?route=extension/blog/article&blog_id=3` is redirected to the address the core builds, and that address opens without a redirect when the extension builds the same address it reads.
+  - Cost. A store without foreign records does not load the router of the core and runs the same queries as 1.7.2. In a store with them, an address with a foreign record costs the queries of the core, one per part of the address, and each different link given to the core costs the queries of the extension, once per request. The unmodified `rewrite()` runs no query for such a link.
+  - The store has foreign records when the cached map of keywords of the current store and language has one. After the last foreign record is deleted directly in the database, links are still given to the core until the map is built again.
 - The first part of an address that is not a keyword ends the lookup: a long unknown address costs one database query.
 - Main category of a product: only a category of the product can be the main one. When none is chosen or the chosen one is removed from the product, the first category becomes the main one. A copy of a product keeps the main category.
 - Requests other than GET and HEAD, AJAX requests and the feeds `extension/feed/google_sitemap`, `extension/feed/google_base` and `extension/feed/sitemap_ml` are never redirected. An address made of a route that has a keyword (`/product/search?search=tyre`) is redirected to the keyword with all its parameters.
@@ -82,6 +90,16 @@ Import modules that write directly to the database do not clear the module cache
 
 ## Limitations
 - Cart in theme `default`: after removing a product the cart page reloads, and the checkout page goes to the cart, also when these pages have SEO keywords. Other themes are not changed. In the OCTemplates Deals theme the cart page reloads itself only if the cart keyword is `cart` or `checkout` and the shop is not installed in a subdirectory.
+
+## Upgrade to 1.8
+Install the new archive, press Refresh, reset OPcache when `opcache.validate_timestamps=0`. The database is not changed: the schema version stays `1.7` and no migration runs. The cached maps of keywords of 1.7.2 are built again by the first request.
+
+Changes since 1.7.2:
+- Records of other extensions in `seo_url` are passed to the router of the core with its modifications, see Behaviour. In 1.6.3 to 1.7.2 such a record answered 404 and the links to its page stayed `index.php?route=...`. An extension that adds its kinds of SEO URL to `catalog/controller/startup/seo_url.php` by OCMOD now works in the mode SEO Pro without changes in the module. An extension that replaces the router in another way is not covered.
+- A shop that has such records and such a modification changes its addresses: the keywords open pages, the links get them, and `index.php?route=...` of these pages is redirected to them with a 301. List the records before the upgrade: `php tests/audit_seo_url.php /path/to/shop/config.php` prints them as `foreign`.
+- A link to a route that has a keyword and also has parameters is given to the core first in a store with foreign records. The unmodified core returns it unchanged and the link is the same as in 1.7.2.
+- A store without foreign records: the same pages, links and queries as in 1.7.2.
+- `tests/audit_seo_url.php` tells `foreign` records from `unsupported` ones (wrong records of the module, which still answer 404). The exit code is 1 for both, as before.
 
 ## Upgrade to 1.7.2
 Install the new archive, press Refresh, reset OPcache when `opcache.validate_timestamps=0`. The database is not changed: the schema version stays `1.7` and no migration runs. The cached maps of keywords of 1.7.1 are built again by the first request.
@@ -106,13 +124,13 @@ Changes since 1.7:
 Rollback to 1.6.3: install its archive and press Refresh. H1 and the descriptions stay in the database and are not shown. A later upgrade to 1.7 checks the existing structures again and uses them.
 
 ## Upgrade to 1.6.3
-Records of Design → SEO URL with another kind of query (for example `blog_id=3` of a blog extension) are no longer opened by the module. Before the upgrade list them, nothing is changed in the database:
+Records of Design → SEO URL with another kind of query (for example `blog_id=3` of a blog extension) are not opened by the module itself. In 1.6.3 to 1.7.2 they answer 404; since 1.8 they are passed to the router of the core, see Behaviour. List them, nothing is changed in the database:
 
 ```sh
 php tests/audit_seo_url.php /path/to/shop/config.php
 ```
 
-Do not install this version on a shop that needs such records.
+Do not install a version from 1.6.3 to 1.7.2 on a shop that needs such records.
 
 ## Compatible
 OpenCart 3.0.5.1. Tested on PHP 8.1, 8.3 and 8.5. PHP 8.0 and other OpenCart 3.0.x versions are not tested. The tests run on stubs and on the core files: see `tests/README.md` for what they do not cover.

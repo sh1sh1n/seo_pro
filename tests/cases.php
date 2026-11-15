@@ -204,6 +204,8 @@ foreach (['/tyre/moto/' => 'category after product', '/tyre/road.tyre.html' => '
 	'/contact/search/' => 'two routes', '/moto/moto/' => 'the same category twice', '/moto/enduro/moto/' => 'the same category again'] as $uri => $name) {
 	foreach (['GET', 'POST'] as $method) { $x = req($uri . '?product_id=1&path=10', $method); check("$name -> 404 ($method)", $x['route'] ?? $x, 'error/not_found'); }
 }
+// Since 1.8 the records of $bad that are not wrong records of the module are foreign and go to the router of the core.
+// Here it is the unmodified one, which reads none of them: still 404. cases_foreign.php has the router with a modification
 $rows = []; foreach ($bad as $i => $q) $rows[] = [0, 1, $q, "bad$i"];
 foreach ($bad as $i => $q) {
 	[$x, $r] = run("/bad$i.html?product_id=1&information_id=4", 'GET', ['seo' => $rows, 'config' => $np]);
@@ -273,7 +275,6 @@ foreach (['/index.php?route=product/category&path=10&a%26b=1' => ['http://shop.t
 echo "\n-- the map follows records written to seo_url past the models of the core\n";
 // warm(): a request that leaves the map in the cache. Then the table is changed and the next requests use the same table and cache
 function warm() { [, $r] = run('/moto/'); return ['db' => $r->get('db'), 'cache' => $r->get('cache')]; }
-function row($db, $keyword) { foreach ($db->seo as $i => $row) if ($row[0] == 0 && $row[1] == 1 && $row[3] === $keyword) return $i; throw new Exception("no keyword $keyword"); }
 $o = warm();
 [$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o);
 check('map from the cache: MAX(seo_url_id) and one check of the address, no map load', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'verify'), sql($r, 'map'), sql($r, 'fallback'), sql($r, 'all')], ['product/product', 1, 1, 0, 0, 2]);
