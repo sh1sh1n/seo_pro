@@ -14,7 +14,8 @@ class Action { public $route; function __construct($r) { $this->route = $r; } }
 class Registry { private $d = []; function get($k) { return $this->d[$k] ?? null; } function set($k, $v) { $this->d[$k] = $v; } }
 abstract class Controller { protected $registry; function __construct($r) { $this->registry = $r; } function __get($k) { return $this->registry->get($k); } }
 class Config { public $d = []; function get($k) { return $this->d[$k] ?? null; } }
-class Cache { public $d = []; function get($k) { return $this->d[$k] ?? null; } function set($k, $v) { $this->d[$k] = json_decode(json_encode($v), true); } function delete($k) {} }
+// Keeps the values as JSON like the file cache does, and records the keys it was asked for
+class Cache { public $d = []; public $gets = []; public $sets = []; function get($k) { $this->gets[] = $k; return $this->d[$k] ?? null; } function set($k, $v) { $this->sets[] = $k; $this->d[$k] = json_decode(json_encode($v), true); } function delete($k) {} }
 class Redirect extends Exception { public $url; public $status; function __construct($u, $s) { $this->url = $u; $this->status = $s; } }
 class Response { public $headers = []; function addHeader($h) { $this->headers[] = $h; } function redirect($url, $status = 302) { throw new Redirect(str_replace('&amp;', '&', $url), $status); } }
 class Session { public $data = ['language' => 'en-gb']; }
@@ -36,6 +37,8 @@ class DB {
 		throw new Exception("unexpected SQL $sql");
 	}
 }
+// OpenCart loads the library with its autoloader
+require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_cache.php';
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/catalog/controller/extension/startup/seo_pro.php';
 
 function env($opts = []) {
@@ -91,4 +94,6 @@ function follow($uri, $opts = []) {
 }
 // The parameters the visitor sent, as PHP parses them
 function params($x) { $g = $x['get'] ?? []; unset($g['route'], $g['path'], $g['product_id'], $g['manufacturer_id'], $g['information_id']); return json_decode(json_encode($g), true); }
+// A new request: the groups of paths read by the previous one are forgotten
+function new_request() { $p = new ReflectionProperty('ControllerExtensionStartupSeoPro', 'path_groups'); if (PHP_VERSION_ID < 80100) $p->setAccessible(true); $p->setValue(null, []); }
 function call($c, $method, ...$args) { $m = new ReflectionMethod($c, $method); if (PHP_VERSION_ID < 80100) $m->setAccessible(true); return $m->invoke($c, ...$args); }

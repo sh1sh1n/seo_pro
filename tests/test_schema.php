@@ -67,7 +67,8 @@ function run($setup = null, $db = null) {
 function caps($main, $p, $c, $i, $m) { return ['main_category' => $main, 'h1_product' => $p, 'h1_category' => $c, 'h1_information' => $i, 'manufacturer_description' => $m]; }
 function ddl($x) { return array_values(preg_grep('~^(ALTER|CREATE)~', $x['kinds'])); }
 $all = caps(true, true, true, true, true); $none = caps(false, false, false, false, false);
-$caches = ['product.seopath', 'category.seopath', 'seo_pro', 'seo_pro.0.1', 'seo_pro.0.2', 'seo_pro.1.1', 'seo_pro.1.2', 'product', 'category', 'manufacturer'];
+$groups = []; for ($g = 0; $g < 32; $g++) array_push($groups, sprintf('seo_pro.path.p.%02d', $g), sprintf('seo_pro.path.c.%02d', $g));
+$caches = ['product.seopath', 'category.seopath', ...$groups, 'seo_pro', 'seo_pro.0.1', 'seo_pro.0.2', 'seo_pro.1.1', 'seo_pro.1.2', 'product', 'category', 'manufacturer'];
 $checks = ['DESCRIBE product_to_category', 'DESCRIBE product_description', 'DESCRIBE category_description', 'DESCRIBE information_description', 'TABLES manufacturer_description'];
 $tail = ['oc_store`', 'oc_language`', 'DELETE', 'INSERT', 'RELEASE_LOCK'];
 $full = ['GET_LOCK', 'DESCRIBE product_to_category', 'ALTER product_to_category', 'DESCRIBE product_description', 'ALTER product_description', 'DESCRIBE category_description', 'ALTER category_description',

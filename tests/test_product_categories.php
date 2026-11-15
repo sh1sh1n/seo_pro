@@ -113,7 +113,7 @@ check('getProductMainCategoryId is 0', $m->getProductMainCategoryId(7), 0);
 echo "\n-- caches\n";
 foreach (['add' => fn($m) => $m->addProduct(d(['product_category' => [10, 11], 'main_category_id' => 11])), 'edit' => fn($m) => $m->editProduct(7, d(['product_category' => [10, 11], 'main_category_id' => 11])), 'copy' => fn($m) => $m->copyProduct(7)] as $name => $f) {
 	[$r, $m, $db] = env(); $db->p2c[7] = [10 => 0, 11 => 1]; $cache = $r->get('cache');
-	$cache->d = ['product.seopath' => [7 => '10', 101 => '10'], 'category.seopath' => [10 => '10'], 'seo_pro.0.1' => [], 'seo_pro.1.1' => [], 'other' => 1];
+	$cache->d = ['product.seopath' => [7 => '10'], 'category.seopath' => [10 => '10'], 'seo_pro.path.p.07' => [7 => '10'], 'seo_pro.path.p.05' => [101 => '10'], 'seo_pro.path.c.10' => [10 => '10'], 'seo_pro.0.1' => [], 'seo_pro.1.1' => [], 'other' => 1];
 	$f($m);
 	check("$name: the module caches are cleared", array_keys($cache->d), ['other']);
 	$log = $db->log; $update = max(array_keys(preg_grep('~^UPDATE oc_product_to_category SET main_category~', $log))); $clear = min(array_keys(preg_grep('~oc_store`~', $log)));

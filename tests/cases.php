@@ -107,6 +107,38 @@ check('schema failed: no main_category in SQL', count(preg_grep('~main_category~
 [$r, $c] = boot([]); $c->index(); $r->get('db')->p2c[89] = 11; $r->get('url')->link('product/product', 'product_id=89');
 check('schema ready: main_category in SQL', count(preg_grep('~product_id = .89. ORDER BY main_category DESC LIMIT 1~', $r->get('db')->log)), 1);
 
+echo "\n-- cached paths split into groups\n";
+$groups = fn($cache) => array_values(preg_grep('~^seo_pro\.path\.~', array_keys($cache->d)));
+new_request(); [$r, $c] = boot([]); $c->index(); $cache = $r->get('cache'); $cache->sets = []; $cache->gets = [];
+check('key of a product group', [Seo_pro_cache::pathKey('p', 1), Seo_pro_cache::pathKey('p', 33), Seo_pro_cache::pathKey('p', 32), Seo_pro_cache::pathKey('c', 111)], ['seo_pro.path.p.01', 'seo_pro.path.p.01', 'seo_pro.path.p.00', 'seo_pro.path.c.15']);
+check('a miss of product 1', $r->get('url')->link('product/product', 'product_id=1'), 'http://shop.test/moto/enduro/tyre.html');
+check('a miss writes only the group of the product and of its category', $cache->sets, ['seo_pro.path.c.11', 'seo_pro.path.p.01']);
+check('the group holds only that product', [$cache->d['seo_pro.path.p.01'], $cache->d['seo_pro.path.c.11']], [[1 => '10_11'], [11 => '10_11']]);
+$r->get('db')->p2c[33] = 10; $cache->sets = [];
+check('product 33 of the same group', $r->get('url')->link('product/product', 'product_id=33'), 'http://shop.test/index.php?route=product/product&amp;path=10&amp;product_id=33');
+check('its miss rewrites the group it shares with product 1', $cache->sets, ['seo_pro.path.c.10', 'seo_pro.path.p.01']);
+check('the shared group keeps both', $cache->d['seo_pro.path.p.01'], [1 => '10_11', 33 => '10']);
+$r->get('url')->link('product/product', 'product_id=1'); $r->get('url')->link('product/product', 'product_id=33'); $r->get('url')->link('product/product', 'product_id=1');
+$reads = array_count_values($cache->gets);
+check('each group is read from the cache once per request', [$reads['seo_pro.path.p.01'], $reads['seo_pro.path.c.11'], $reads['seo_pro.path.c.10']], [1, 1, 1]);
+check('links of known products write nothing', $cache->sets, ['seo_pro.path.c.10', 'seo_pro.path.p.01']);
+
+// Another request wrote group 02 meanwhile: a miss in group 01 does not overwrite it
+$cache->d['seo_pro.path.p.02'] = [2 => '10', 66 => '30'];
+new_request(); [$r, $c] = boot([]); $r->set('cache', $cache); $c->index(); $cache->sets = []; $cache->gets = []; $r->get('db')->log = [];
+check('product 1 from the cache', $r->get('url')->link('product/product', 'product_id=1'), 'http://shop.test/moto/enduro/tyre.html');
+check('product 2 from the group of another request', $r->get('url')->link('product/product', 'product_id=2'), 'http://shop.test/moto/road.tyre.html');
+check('cached products cost no SQL', count(preg_grep('~product_to_category|category_path~', $r->get('db')->log)), 0);
+check('product 9 in group 09', $r->get('url')->link('product/product', 'product_id=9'), 'http://shop.test/' . implode('/', array_map(fn($i) => "c$i", range(100, 111))) . '/deep.html');
+check('the miss wrote groups 09 and 15 only', $cache->sets, ['seo_pro.path.c.15', 'seo_pro.path.p.09']);
+check('the group of the other request is kept', $cache->d['seo_pro.path.p.02'], [2 => '10', 66 => '30']);
+check('every group in the cache', $groups($cache), ['seo_pro.path.c.11', 'seo_pro.path.p.01', 'seo_pro.path.c.10', 'seo_pro.path.p.02', 'seo_pro.path.c.15', 'seo_pro.path.p.09']);
+$r->get('db')->p2c[34] = 999;
+check('a category without a path: empty path, no path in the link', [call($c, 'getPathByProduct', 34), call($c, 'getPathByCategory', 999)], ['', '']);
+check('ids below 1', [call($c, 'getPathByProduct', 0), call($c, 'getPathByCategory', -3)], [false, false]);
+check('a product without categories', call($c, 'getPathByProduct', 35), false);
+new_request();
+
 echo "\n-- type switch (F02)\n";
 [$r, $c] = boot(['config' => ['config_seo_url_type' => 'seo_url']]);
 $res = $c->index();

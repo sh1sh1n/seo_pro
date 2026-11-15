@@ -64,8 +64,15 @@ Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no lo
 - The first part of an address that is not a keyword ends the lookup: a long unknown address costs one database query.
 - Main category of a product: only a category of the product can be the main one. When none is chosen or the chosen one is removed from the product, the first category becomes the main one. A copy of a product keeps the main category.
 - Requests other than GET and HEAD, AJAX requests and the feeds `extension/feed/google_sitemap`, `extension/feed/google_base` and `extension/feed/sitemap_ml` are never redirected. An address made of a route that has a keyword (`/product/search?search=tyre`) is redirected to the keyword with all its parameters.
-- The module caches are cleared by exact keys after changes in products, categories, manufacturers, information pages, Design → SEO URL and after Repair in categories, so the file cache, Redis, Mem and Memcached are all supported. Changes made directly in the database need a manual cache reset.
+- The module caches are cleared by exact keys after changes in products, categories, manufacturers, information pages, Design → SEO URL and after Repair in categories, so the file cache, Redis, Mem and Memcached are all supported. Changes made directly in the database need a manual cache reset, see [After an import](#after-an-import).
+- The paths of products and categories are cached in 32 groups by id (`seo_pro.path.p.00` … `seo_pro.path.p.31`, `seo_pro.path.c.00` … `seo_pro.path.c.31`). A new product rewrites only its own group.
 - `/sitemap.xml` works with or without the rewrite rule for it in `.htaccess`.
+
+### After an import
+Import modules that write directly to the database do not clear the module caches. Until the caches are cleared, new products get links `index.php?route=...`, their SEO addresses answer 404, and changed keywords and main categories stay old until the cache expires (`cache_expire`, one hour by default). Clear the caches after every import:
+- In the admin: OpenCart 3.0.5.1 has no button for this cache. The buttons in Developer Settings clear the theme and SASS caches only, Refresh in Extensions → Modifications the modification cache only. Saving any product, category, manufacturer, information page or record of Design → SEO URL clears every module cache.
+- File cache (`cache_engine` `file`, the default): delete the files `system/storage/cache/cache.seo_pro*`. Every key of the module starts with `seo_pro`. After an upgrade from 1.7 also delete `cache.product.seopath*` and `cache.category.seopath*`.
+- Redis, Mem, Memcached: flush the database of the cache (`FLUSHDB` in Redis, `flush_all` in Memcached). This also clears the core caches and everything else stored in it.
 
 ## Limitations
 - Cart in theme `default`: after removing a product the cart page reloads, and the checkout page goes to the cart, also when these pages have SEO keywords. Other themes are not changed. In the OCTemplates Deals theme the cart page reloads itself only if the cart keyword is `cart` or `checkout` and the shop is not installed in a subdirectory.

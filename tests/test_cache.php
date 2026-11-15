@@ -16,9 +16,11 @@ class DB { public $log = [];
 		if (strpos($sql, 'SELECT store_id FROM `oc_store`') === 0) return new Res([['store_id' => 1], ['store_id' => 2]]);
 		if (strpos($sql, 'SELECT language_id FROM `oc_language`') === 0) return new Res([['language_id' => 1], ['language_id' => 2]]);
 		return new Res(); } }
-class ExactCache { public $d = [];
-	function get($k) { return $this->d[$k] ?? null; } function set($k, $v) { $this->d[$k] = $v; } function delete($k) { unset($this->d[$k]); }
-	function warm() { $this->d = ['product.seopath' => 1, 'category.seopath' => 1, 'other' => 1]; foreach ([0, 1, 2] as $s) foreach ([1, 2] as $l) $this->d["seo_pro.$s.$l"] = 1; }
+// Every key the module writes: the maps of each store and language, the groups of paths, the keys of 1.7 and older
+function module_keys() { $k = ['product.seopath', 'category.seopath']; for ($g = 0; $g < 32; $g++) { $k[] = sprintf('seo_pro.path.p.%02d', $g); $k[] = sprintf('seo_pro.path.c.%02d', $g); } foreach ([0, 1, 2] as $s) foreach ([1, 2] as $l) $k[] = "seo_pro.$s.$l"; return $k; }
+class ExactCache { public $d = []; public $del = [];
+	function get($k) { return $this->d[$k] ?? null; } function set($k, $v) { $this->d[$k] = $v; } function delete($k) { $this->del[] = $k; unset($this->d[$k]); }
+	function warm() { $this->d = array_fill_keys(module_keys(), 1) + ['other' => 1]; }
 	function left() { return implode(',', array_keys($this->d)); } }
 class Any { function __call($n, $a) { return true; } function __get($k) { return $this; } }
 class Stop extends Exception {}
@@ -37,6 +39,12 @@ function reg() { $r = new Registry(); foreach (['db' => new DB(), 'cache' => new
 echo "-- F05: Seo_pro_cache::clear on an exact-key cache\n";
 $r = reg(); Seo_pro_cache::clear($r->get('db'), $r->get('cache'));
 check('only foreign keys left', $r->get('cache')->left(), 'other');
+check('32 groups of paths', Seo_pro_cache::PATH_GROUPS, 32);
+$del = $r->get('cache')->del;
+check('each group of products and of categories deleted by its name', array_values(array_intersect(module_keys(), $del)), module_keys());
+check('groups 00..31 of both kinds, nothing else under seo_pro.path', count(preg_grep('~^seo_pro\.path\.[pc]\.(0\d|1\d|2\d|3[01])$~', $del)) === 64 && count(preg_grep('~^seo_pro\.path\.~', $del)) === 64, true);
+check('keys of 1.7 deleted', array_values(array_intersect(['product.seopath', 'category.seopath'], $del)), ['product.seopath', 'category.seopath']);
+check('the key of every group is the one the controller writes', array_map(fn($id) => Seo_pro_cache::pathKey('p', $id), [1, 31, 32, 63, 1000]), ['seo_pro.path.p.01', 'seo_pro.path.p.31', 'seo_pro.path.p.00', 'seo_pro.path.p.31', 'seo_pro.path.p.08']);
 
 echo "\n-- F01: Design > SEO URL (modified admin/model/design/seo_url.php)\n";
 require $out . '/admin/model/design/seo_url.php';
@@ -55,7 +63,7 @@ class RepairModel { public $calls = 0; public $cache; public $seen;
 $r = reg(); $m = new RepairModel(); $m->cache = $r->get('cache'); $r->set('model_catalog_category', $m);
 try { (new ControllerCatalogCategory($r))->repair(); } catch (Stop $e) {}
 check('repairCategories called once', $m->calls, 1);
-check('caches were warm during repair', strpos($m->seen, 'category.seopath') !== false, true);
+check('caches were warm during repair', strpos($m->seen, 'seo_pro.path.c.00') !== false, true);
 check('caches cleared after repair', $r->get('cache')->left(), 'other');
 check('cleared once', count(preg_grep('~oc_store~', $r->get('db')->log)), 1);
 

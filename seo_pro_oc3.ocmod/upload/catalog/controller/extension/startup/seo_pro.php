@@ -6,6 +6,9 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 	private $cache_language_id = null;
 
+	// Groups of the cached paths of products and categories read in this request, by cache key
+	private static $path_groups = array();
+
 	// Routes whose ids are turned into aliases, and the parameters each of them owns
 	private $page_routes = array(
 		'product/product'           => array('path', 'product_id'),
@@ -408,13 +411,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$product_id = (int)$product_id;
 		if ($product_id < 1) return false;
 
-		static $path = null;
-		if (!isset($path)) {
-			$path = $this->cache->get('product.seopath');
-			if (!is_array($path)) {
-				$path = array();
-			}
-		}
+		$path = $this->getPathGroup('p', $product_id);
 
 		if (!isset($path[$product_id])) {
 			// Without the column main_category the first category of the product is used
@@ -423,7 +420,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			$query = $this->db->query("SELECT category_id FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "'" . $order . " LIMIT 1");
 			$path[$product_id] = $this->getPathByCategory($query->num_rows ? (int)$query->row['category_id'] : 0);
 
-			$this->cache->set('product.seopath', $path);
+			$this->setPathGroup('p', $product_id, $path);
 		}
 
 		return $path[$product_id];
@@ -433,23 +430,39 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$category_id = (int)$category_id;
 		if ($category_id < 1) return false;
 
-		static $path = null;
-		if (!isset($path)) {
-			$path = $this->cache->get('category.seopath');
-			if (!is_array($path)) {
-				$path = array();
-			}
-		}
+		$path = $this->getPathGroup('c', $category_id);
 
 		if (!isset($path[$category_id])) {
 			$query = $this->db->query("SELECT GROUP_CONCAT(path_id ORDER BY level SEPARATOR '_') AS path FROM " . DB_PREFIX . "category_path WHERE category_id = '" . $category_id . "'");
 
 			$path[$category_id] = ($query->num_rows && $query->row['path'] !== null) ? $query->row['path'] : '';
 
-			$this->cache->set('category.seopath', $path);
+			$this->setPathGroup('c', $category_id, $path);
 		}
 
 		return $path[$category_id];
+	}
+
+	// The cached paths are split into Seo_pro_cache::PATH_GROUPS groups: a miss rewrites only the group of its id,
+	// and each group is read from the cache once per request
+	private function getPathGroup($type, $id) {
+		$key = Seo_pro_cache::pathKey($type, $id);
+
+		if (!isset(self::$path_groups[$key])) {
+			$group = $this->cache->get($key);
+
+			self::$path_groups[$key] = is_array($group) ? $group : array();
+		}
+
+		return self::$path_groups[$key];
+	}
+
+	private function setPathGroup($type, $id, $group) {
+		$key = Seo_pro_cache::pathKey($type, $id);
+
+		self::$path_groups[$key] = $group;
+
+		$this->cache->set($key, $group);
 	}
 
 	private function validate() {

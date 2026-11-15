@@ -13,9 +13,9 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 | Part | Command | Fails with |
 |---|---|---|
 | OCMOD: `install.xml` applied to the core the way Refresh does | `php tests/ocmod_sim.php --check=install.xml <core with upload/> <out dir> $OC_DIR/system/modification.xml seo_pro_oc3.ocmod/install.xml` | exit code 1 |
-| Controller: links, decoding, redirects | `curl -f http://127.0.0.1:8765/cases.php` under `OC_DIR=... php -S 127.0.0.1:8765 -t tests` | HTTP 500 |
+| Controller: links, decoding, redirects, cached paths in groups (a miss writes only its group, a group is read once per request) | `curl -f http://127.0.0.1:8765/cases.php` under `OC_DIR=... php -S 127.0.0.1:8765 -t tests` | HTTP 500 |
 | Schema installer | `php tests/test_schema.php` | exit code 1 |
-| Cache resets | `php tests/test_cache.php <out dir>` | exit code 1 |
+| Cache resets: every group of paths of both kinds, the keys of 1.7, the maps | `php tests/test_cache.php <out dir>` | exit code 1 |
 | Main category of a product: add, edit, copy | `php tests/test_product_categories.php <out dir>` | exit code 1 |
 | `audit_seo_url.php --tsv`: wrong input is never a clean result | `php tests/test_audit.php` | exit code 1 |
 | SEO settings of the default store and of additional stores | `OC_DIR=... php tests/test_store_settings.php <out dir>` | exit code 1 |
@@ -35,7 +35,8 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 
 - A real database: the first run of the schema installer in two requests at once, a database user without the ALTER or CREATE privilege, the composite primary key of `product_to_category`, the `store_id` of the saved settings, `ALTER TABLE ... ADD meta_h1` on large tables, `CREATE TABLE manufacturer_description` on MyISAM and InnoDB, truncation by `sql_mode`. The DDL and the checks of existing tables run against a stub.
 - The admin forms in a browser: the tabs, Summernote and the JavaScript of the forms. The settings forms and the forms of products, categories, information pages and manufacturers are rendered by Twig from the changed templates and checked as HTML.
-- Redis, Mem and Memcached: the cache is a stub that deletes by exact key.
+- Redis, Mem and Memcached: the cache is a stub that deletes by exact key. The prefix delete of the file cache is not run by the tests.
+- Two requests that write the same group of paths at once: the later write still drops the paths the other one added to that group.
 - A shop in a subdirectory, a port other than 80 and 443, the templates of themes other than `default`. Other modifications only at the level of OCMOD and `php -l`: two synthetic extensions and, with `DEALS_DIR`, Deals.
 - Speed and memory.
 - PHP versions other than the ones the script was run on.
