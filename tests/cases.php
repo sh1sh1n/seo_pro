@@ -213,6 +213,11 @@ $x = req('/max.html', 'GET', $np, [], [[0,1,'product_id=2147483647','max']]); ch
 $x = req('/moto/zzz/?product_id=1'); check('unknown part after a category -> 404 with product_id', $x['route'] ?? $x, 'error/not_found');
 $x = req('/moto/enduro/tyre.html/zzz?product_id=1'); check('unknown tail after a product -> 404', $x['route'] ?? $x, 'error/not_found');
 $x = req('/zzz?route=product/product&product_id=1'); check('unknown address with GET route -> 404', [$x['route'] ?? $x, $x['res'] ?? null], ['error/not_found', 'error/not_found']);
+foreach (['/index.php?route[]=x', '/index.php?route[a][b]=x', '/index.php?_route_[]=x', '/zzz?route[]=product/product&product_id=1'] as $uri) {
+	foreach (['GET', 'POST'] as $method) { $x = req($uri, $method, $np); check("$uri: a route sent as an array -> 404 without a redirect ($method)", [$x['route'] ?? $x, $x['res'] ?? null, isset($x['get']['_route_'])], ['error/not_found', 'error/not_found', false]); }
+}
+$x = req('/tyre.html?route[]=x', 'GET', $np); check('an array route next to an address is dropped by the redirect', $x['redirect'] ?? $x, 'http://shop.test/tyre.html');
+$x = req('/tyre.html?route[]=x', 'POST', $np); check('an array route does not replace the page (POST)', [$x['route'] ?? $x, $x['res'] ?? null], ['product/product', 'product/product']);
 $x = req('/zzz?manufacturer_id=5'); check('unknown address with manufacturer_id -> 404', $x['route'] ?? $x, 'error/not_found');
 $x = req('/zzz?information_id=4', 'POST'); check('unknown address with information_id, POST -> 404', $x['route'] ?? $x, 'error/not_found');
 $x = req('/tyre.html?route=account/login', 'POST', $np); check('GET route does not replace the page', [$x['route'] ?? $x, $x['res'] ?? null], ['product/product', 'product/product']);

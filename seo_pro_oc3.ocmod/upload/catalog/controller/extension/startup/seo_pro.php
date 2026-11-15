@@ -38,6 +38,18 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		$this->loadCache();
 
+		// The address, or the route when there is no address, sent as an array ("_route_[]=x", "route[]=x") is not a page.
+		// A route next to an address is replaced below, whatever it is
+		$key = isset($this->request->get['_route_']) ? '_route_' : 'route';
+
+		if (isset($this->request->get[$key]) && !is_string($this->request->get[$key])) {
+			unset($this->request->get['_route_']);
+
+			$this->request->get['route'] = 'error/not_found';
+
+			return new Action('error/not_found');
+		}
+
 		// Decode URL
 		if (!isset($this->request->get['_route_'])) {
 			$this->validate();

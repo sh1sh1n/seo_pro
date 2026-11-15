@@ -1,7 +1,7 @@
 # Free SEO Pro for OpenCart
 Free extension to create clean URLs (also sometimes referred to as RESTful URLs, user-friendly URLs, pretty URLs or search engine-friendly URLs)
 
-[Download extension for OpenCart 3.0.5.1](https://github.com/sh1sh1n/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (this fork, version 1.7; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
+[Download extension for OpenCart 3.0.5.1](https://github.com/sh1sh1n/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (this fork, version 1.7.1; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
 
 ## Using
 1. Make a backup of the files and the database.
@@ -33,7 +33,7 @@ On the first request after Refresh (in the admin or on the storefront) the modul
 | Descriptions of manufacturers | table `manufacturer_description` (`manufacturer_id`, `language_id`, `description`, `meta_title`, `meta_h1`, `meta_description`, `meta_keyword`, primary key `manufacturer_id, language_id`), with the engine and the charset of `manufacturer` |
 
 - The database user needs ALTER and CREATE for the migration, besides the usual SELECT, INSERT, UPDATE and DELETE. Existing columns and tables are not changed and not dropped: a compatible `meta_h1` (varchar of 255 characters or more, or text) and a compatible `manufacturer_description` (for example of ocStore) are used as they are, a missing text column of the table is added. A column or a table that does not fit (another type, another primary key) is a conflict: it is written to the error log and the function stays off.
-- Every function is ready on its own. An error of one function does not turn off the others, and the main category and the SEO addresses keep working. The module tries again on the next request; the version `1.7` is written and the module caches are cleared only when every function is ready. After that no check is made: a column removed by hand later is not detected.
+- Every function is ready on its own. An error of one function does not turn off the others, and the main category and the SEO addresses keep working. The module tries again on the next request; the schema version `1.7` is written and the module caches are cleared only when every function is ready. After that no check is made: a column removed by hand later is not detected.
 - Until the column `main_category` exists the main category of a product is not shown and not saved, and the product path is built from the first category of the product.
 - Until H1 of products, categories or information pages is ready, saving and copying of these records in the admin is refused with a message, so that nothing is saved without H1. The storefront shows the name. Until the manufacturer descriptions are ready, adding, editing and deleting manufacturers is refused the same way. Version 1.6.3 saved these records in that case.
 - `ALTER TABLE` of large tables can hold queries for a while. Try the upgrade on a copy of the shop and choose the time.
@@ -67,6 +67,7 @@ Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no lo
 - The module caches are cleared by exact keys after changes in products, categories, manufacturers, information pages, Design → SEO URL and after Repair in categories, so the file cache, Redis, Mem and Memcached are all supported. Changes made directly in the database need a manual cache reset, see [After an import](#after-an-import).
 - The paths of products and categories are cached in 32 groups by id (`seo_pro.path.p.00` … `seo_pro.path.p.31`, `seo_pro.path.c.00` … `seo_pro.path.c.31`). A new product rewrites only its own group.
 - `/sitemap.xml` works with or without the rewrite rule for it in `.htaccess`.
+- An address or a route sent as an array (`/index.php?route[]=x`, `/index.php?_route_[]=x`) answers 404 without a redirect. An array `route` next to a SEO address is ignored: `/tyre.html?route[]=x` opens the product, and a GET request is redirected to `/tyre.html`.
 
 ### After an import
 Import modules that write directly to the database do not clear the module caches. Until the caches are cleared, new products get links `index.php?route=...`, their SEO addresses answer 404, and changed keywords and main categories stay old until the cache expires (`cache_expire`, one hour by default). Clear the caches after every import:
@@ -76,6 +77,14 @@ Import modules that write directly to the database do not clear the module cache
 
 ## Limitations
 - Cart in theme `default`: after removing a product the cart page reloads, and the checkout page goes to the cart, also when these pages have SEO keywords. Other themes are not changed. In the OCTemplates Deals theme the cart page reloads itself only if the cart keyword is `cart` or `checkout` and the shop is not installed in a subdirectory.
+
+## Upgrade to 1.7.1
+Install the new archive, press Refresh, reset OPcache when `opcache.validate_timestamps=0`. The database is not changed: the schema version stays `1.7` and no migration runs.
+
+Changes since 1.7:
+- `/index.php?route[]=x` wrote the PHP warning `Array to string conversion` to the error log and was redirected to `/index.php?route=Array`; `/index.php?_route_[]=x` answered HTTP 500. Both answer 404 now.
+- The paths of products and categories are cached in 32 groups by id. With the file cache delete `cache.product.seopath*` and `cache.category.seopath*` of 1.7, see [After an import](#after-an-import).
+- The helpers of the store settings and of the product categories moved from `install.xml` to the library (`system/library/seo_pro_settings.php`, `seo_pro_schema.php`).
 
 ## Upgrade to 1.7
 1. Back up the files, the database, the installed modifications and the archive of the version in use.
