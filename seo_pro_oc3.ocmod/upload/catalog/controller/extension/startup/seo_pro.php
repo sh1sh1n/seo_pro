@@ -9,6 +9,15 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	// Groups of the cached paths of products and categories read in this request, by cache key
 	private static $path_groups = array();
 
+	// MAX(seo_url_id) of the table, read once per request
+	private $max_id = null;
+
+	// The map differs from the table seo_url: set by the checks, the map is then built again
+	private $stale = false;
+
+	// The keywords taken from the map while an address is resolved or built; null when they are not collected
+	private $hits = null;
+
 	// Routes whose ids are turned into aliases, and the parameters each of them owns
 	private $page_routes = array(
 		'product/product'           => array('path', 'product_id'),
@@ -54,7 +63,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		if (!isset($this->request->get['_route_'])) {
 			$this->validate();
 		} else {
-			$route_ = $route = $this->request->get['_route_'];
+			$route = $this->request->get['_route_'];
 			unset($this->request->get['_route_']);
 
 			if (trim($route, '/') === 'sitemap.xml') {
@@ -63,51 +72,13 @@ class ControllerExtensionStartupSeoPro extends Controller {
 				return new Action($this->request->get['route']);
 			}
 
-			$path = trim(utf8_strtolower($route), '/');
+			$page = $this->resolveAddress($route);
 
-			$postfix = utf8_strtolower(trim((string)$this->config->get('config_seo_url_postfix')));
+			// The map is older than the table: one rebuild, then the address is resolved again
+			if ($this->stale) {
+				$this->loadCache(true);
 
-			// Only addresses without a trailing slash carry the postfix: a category keyword may itself end with it
-			if ($postfix !== '' && substr($route, -1) !== '/' && substr($path, -strlen($postfix)) === $postfix) {
-				$path = substr($path, 0, -strlen($postfix));
-			}
-
-			$parts = explode('/', $path);
-
-			// Part by part. The first part that is not a keyword ends the search: the rest of the address costs no queries
-			$queries = array();
-
-			foreach ($parts as $keyword) {
-				$query = ($keyword === '') ? null : $this->getQueryByKeyword($keyword, true);
-
-				if ($query === null) {
-					$queries = null;
-
-					break;
-				}
-
-				$queries[] = $query;
-			}
-
-			// The address as a whole is a keyword: used only when the address does not resolve part by part,
-			// so "/cat.html" is the keyword "cat" with the postfix, and the keyword "cat.html" only when "cat" does not exist
-			if ($queries === null) {
-				$query = $this->getQueryByKeyword($route);
-
-				if ($query !== null) {
-					$queries = array($query);
-				}
-			}
-
-			$page = ($queries === null) ? null : $this->resolveQueries($queries);
-
-			// The address is a route that has a keyword: validate() redirects it to the keyword with the current parameters
-			if ($page === null && $this->getKeywordByQuery($route_) !== null) {
-				$page = $this->resolveQueries(array($route_));
-
-				if ($page !== null && $page['route'] !== $route_) {
-					$page = null;
-				}
+				$page = $this->resolveAddress($route);
 			}
 
 			// Nothing is written to the request before the whole address is resolved,
@@ -133,6 +104,76 @@ class ControllerExtensionStartupSeoPro extends Controller {
 				return new Action($this->request->get['route']);
 			}
 		}
+	}
+
+	/**
+	 * The page of an address. Sets $this->stale when a keyword of the address shows that the map is out of date.
+	 *
+	 * @return array|null array('route' => string, 'params' => array)
+	 */
+	private function resolveAddress($route) {
+		$this->stale = false;
+		$this->hits = array();
+
+		$path = trim(utf8_strtolower($route), '/');
+
+		$postfix = utf8_strtolower(trim((string)$this->config->get('config_seo_url_postfix')));
+
+		// Only addresses without a trailing slash carry the postfix: a category keyword may itself end with it
+		if ($postfix !== '' && substr($route, -1) !== '/' && substr($path, -strlen($postfix)) === $postfix) {
+			$path = substr($path, 0, -strlen($postfix));
+		}
+
+		$parts = explode('/', $path);
+
+		// Part by part. The first part that is not a keyword ends the search: the rest of the address costs no queries
+		$queries = array();
+
+		foreach ($parts as $keyword) {
+			$query = ($keyword === '') ? null : $this->getQueryByKeyword($keyword, true);
+
+			if ($query === null) {
+				$queries = null;
+
+				break;
+			}
+
+			$queries[] = $query;
+		}
+
+		// The address as a whole is a keyword: used only when the address does not resolve part by part,
+		// so "/cat.html" is the keyword "cat" with the postfix, and the keyword "cat.html" only when "cat" does not exist
+		if ($queries === null) {
+			$query = $this->getQueryByKeyword($route);
+
+			if ($query !== null) {
+				$queries = array($query);
+			}
+		}
+
+		$page = ($queries === null) ? null : $this->resolveQueries($queries);
+
+		$resolved = ($queries !== null);
+
+		// The address is a route that has a keyword: validate() redirects it to the keyword with the current parameters
+		if ($page === null && $this->getKeywordByQuery($route) !== null) {
+			$page = $this->resolveQueries(array($route));
+
+			if ($page !== null && $page['route'] !== $route) {
+				$page = null;
+			}
+
+			$resolved = true;
+		}
+
+		// An address that is not made of keywords is 404 with any map: it costs no query
+		if ($resolved && !$this->stale && !$this->isMapCurrent($this->hits)) {
+			$this->stale = true;
+		}
+
+		$this->hits = null;
+
+		return $page;
 	}
 
 	public function rewrite($link) {
@@ -272,6 +313,10 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$keyword = (string)$keyword;
 
 		if (isset($this->cache_data['keywords'][$keyword])) {
+			if ($this->hits !== null) {
+				$this->hits[] = $keyword;
+			}
+
 			return (string)$this->cache_data['keywords'][$keyword];
 		}
 
@@ -279,9 +324,68 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			return null;
 		}
 
-		$query = $this->db->query("SELECT `query` FROM " . DB_PREFIX . "seo_url WHERE keyword = '" . $this->db->escape($keyword) . "' AND store_id = '" . (int)$this->config->get('config_store_id') . "' ORDER BY (language_id = '" . (int)$this->config->get('config_language_id') . "') DESC, seo_url_id LIMIT 1");
+		$query = $this->db->query("SELECT `query`, LOWER(`keyword`) AS 'keyword', language_id FROM " . DB_PREFIX . "seo_url WHERE keyword = '" . $this->db->escape($keyword) . "' AND store_id = '" . (int)$this->config->get('config_store_id') . "' ORDER BY (language_id = '" . (int)$this->config->get('config_language_id') . "') DESC, seo_url_id LIMIT 1");
 
-		return $query->row ? (string)$query->row['query'] : null;
+		if (!$query->row) {
+			return null;
+		}
+
+		// A record of the current language that the map does not have, or has with another query.
+		// The record is compared, not the address: the database may find "café" for "cafe", and the map has "café"
+		if ((int)$query->row['language_id'] === $this->cache_language_id) {
+			$known = $this->cache_data['keywords'][$query->row['keyword']] ?? null;
+
+			if ($known === null || (string)$known !== (string)$query->row['query']) {
+				$this->stale = true;
+			}
+		}
+
+		return (string)$query->row['query'];
+	}
+
+	/**
+	 * Compares keywords taken from the map with the table seo_url, one query by the index of keyword.
+	 * Finds a keyword or a query changed in place and a deleted record, which MAX(seo_url_id) does not show.
+	 *
+	 * @param array $keywords keys of the map
+	 *
+	 * @return bool false when the map is out of date
+	 */
+	private function isMapCurrent(array $keywords) {
+		if (!$keywords) {
+			return true;
+		}
+
+		$in = array();
+
+		foreach ($keywords as $keyword) {
+			$in[(string)$keyword] = "'" . $this->db->escape((string)$keyword) . "'";
+		}
+
+		$query = $this->db->query("SELECT LOWER(`keyword`) AS 'keyword', `query` FROM " . DB_PREFIX . "seo_url WHERE store_id = '" . (int)$this->cache_store_id . "' AND language_id = '" . (int)$this->cache_language_id . "' AND keyword IN (" . implode(', ', $in) . ") ORDER BY seo_url_id");
+
+		$found = array();
+
+		foreach ($query->rows as $row) {
+			// As in the map, a keyword belongs to its first record
+			if (isset($found[$row['keyword']])) {
+				continue;
+			}
+
+			$found[$row['keyword']] = true;
+
+			if (!isset($this->cache_data['keywords'][$row['keyword']]) || (string)$this->cache_data['keywords'][$row['keyword']] !== (string)$row['query']) {
+				return false;
+			}
+		}
+
+		foreach ($keywords as $keyword) {
+			if (!isset($found[$keyword])) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -293,6 +397,10 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$query = (string)$query;
 
 		if (isset($this->cache_data['queries'][$query])) {
+			if ($this->hits !== null) {
+				$this->hits[] = (string)$this->cache_data['queries'][$query];
+			}
+
 			return (string)$this->cache_data['queries'][$query];
 		}
 
@@ -376,12 +484,22 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		return array('route' => 'information/information', 'params' => array('information_id' => $entity['id']));
 	}
 
-	private function loadCache() {
+	/**
+	 * @param bool $rebuild build the map from the table even when the cached one looks current
+	 */
+	private function loadCache($rebuild = false) {
 		$store_id = (int)$this->config->get('config_store_id');
 		$language_id = (int)$this->config->get('config_language_id');
 
-		if ($this->cache_data !== null && $this->cache_store_id === $store_id && $this->cache_language_id === $language_id) {
+		if (!$rebuild && $this->cache_data !== null && $this->cache_store_id === $store_id && $this->cache_language_id === $language_id) {
 			return;
+		}
+
+		// Read before the records: a record added in between only makes the next request build the map again
+		if ($this->max_id === null || $rebuild) {
+			$query = $this->db->query("SELECT MAX(seo_url_id) AS max_id FROM " . DB_PREFIX . "seo_url");
+
+			$this->max_id = (int)($query->row['max_id'] ?? 0);
 		}
 
 		$this->cache_store_id = $store_id;
@@ -389,12 +507,13 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		$cache_key = 'seo_pro.' . $store_id . '.' . $language_id;
 
-		$cache_data = $this->cache->get($cache_key);
+		$cache_data = $rebuild ? null : $this->cache->get($cache_key);
 
-		if (!is_array($cache_data)) {
+		// A record added past the models of the core (an import, another extension) changes MAX(seo_url_id)
+		if (!is_array($cache_data) || !isset($cache_data['max_id']) || (int)$cache_data['max_id'] !== $this->max_id) {
 			$query = $this->db->query("SELECT LOWER(`keyword`) AS 'keyword', `query` FROM " . DB_PREFIX . "seo_url WHERE store_id = '" . $store_id . "' AND language_id = '" . $language_id . "' ORDER BY seo_url_id");
 
-			$cache_data = array('keywords' => array(), 'queries' => array());
+			$cache_data = array('max_id' => $this->max_id, 'keywords' => array(), 'queries' => array());
 
 			foreach ($query->rows as $row) {
 				// The keyword already belongs to an earlier query: this query keeps a plain link
@@ -513,10 +632,26 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$base = preg_match('~^(?:[^/]*/){3}~', $base, $match) ? $match[0] : substr($base, 0, 1);
 
 		$url = str_replace('&amp;', '&', $base . ltrim($this->request->server['REQUEST_URI'] ?? '', '/'));
+		$this->hits = array();
+
 		$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
+
+		$hits = $this->hits;
+		$this->hits = null;
 
 		// urldecode() on both sides: a space may come as "+" or as "%20"
 		if (urldecode($url) != urldecode($seo)) {
+			// A permanent redirect is not sent to a keyword that is changed or deleted in the table
+			if (!$this->isMapCurrent($hits)) {
+				$this->loadCache(true);
+
+				$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
+
+				if (urldecode($url) == urldecode($seo)) {
+					return;
+				}
+			}
+
 			$this->response->redirect($seo, 301);
 		}
 	}

@@ -26,11 +26,18 @@ class DB {
 	function escape($s) { return addslashes($s); }
 	function query($sql) {
 		$this->log[] = $sql;
+		if (strpos($sql, 'SELECT MAX(seo_url_id) AS max_id FROM oc_seo_url') === 0) return new Res([['max_id' => $this->seo ? max(array_keys($this->seo)) + 1 : null]]);
+		if (preg_match("~FROM oc_seo_url WHERE store_id = '(\d+)' AND language_id = '(\d+)' AND keyword IN \((.*)\) ORDER BY seo_url_id$~", $sql, $m)) {
+			$in = array_map(fn($k) => stripslashes(substr($k, 1, -1)), explode(', ', $m[3]));
+			$r = []; foreach ($this->seo as $row) if ($row[0] == $m[1] && $row[1] == $m[2] && in_array(strtolower($row[3]), $in, true)) $r[] = ['keyword' => strtolower($row[3]), 'query' => $row[2]]; return new Res($r);
+		}
 		if (preg_match("~FROM oc_seo_url WHERE store_id = '(\d+)' AND language_id = '(\d+)'~", $sql, $m)) {
 			$r = []; foreach ($this->seo as $row) if ($row[0] == $m[1] && $row[1] == $m[2]) $r[] = ['keyword' => strtolower($row[3]), 'query' => $row[2]]; return new Res($r);
 		}
 		if (preg_match("~FROM oc_seo_url WHERE keyword = '(.*)' AND store_id = '(\d+)'~", $sql, $m)) {
-			foreach ($this->seo as $row) if ($row[3] === stripslashes($m[1]) && $row[0] == $m[2]) return new Res([['query' => $row[2]]]); return new Res([]);
+			// The current language first, as ORDER BY (language_id = ...) DESC does
+			preg_match("~language_id = '(\d+)'\) DESC~", $sql, $l); $seo = $this->seo; uasort($seo, fn($a, $b) => [$a[1] != $l[1], 0] <=> [$b[1] != $l[1], 0]);
+			foreach ($seo as $row) if ($row[3] === stripslashes($m[1]) && $row[0] == $m[2]) return new Res([['query' => $row[2], 'keyword' => strtolower($row[3]), 'language_id' => (string)$row[1]]]); return new Res([]);
 		}
 		if (preg_match("~product_to_category WHERE product_id = '(\d+)'~", $sql, $m)) return new Res(isset($this->p2c[$m[1]]) ? [['category_id' => $this->p2c[$m[1]]]] : []);
 		if (preg_match("~category_path WHERE category_id = '(\d+)'~", $sql, $m)) return new Res([['path' => $this->paths[$m[1]] ?? null]]);
@@ -47,8 +54,10 @@ function env($opts = []) {
 	$c = new Config(); $c->d = ['config_seo_url_type' => 'seo_pro', 'config_seo_url' => 1, 'config_store_id' => 0, 'config_language_id' => 1,
 		'config_url' => 'http://shop.test/', 'config_ssl' => 'https://shop.test/', 'config_seo_url_postfix' => '.html', 'config_seo_url_include_path' => 1] + ($opts['config'] ?? []);
 	foreach ($opts['config'] ?? [] as $k => $v) $c->d[$k] = $v;
+	// 'db' and 'cache' of an earlier request: the table and the cached map live on between requests
+	if (isset($opts['db'])) { $db = $opts['db']; $db->log = []; goto ready; }
 	$db = new DB();
-	// store, lang, query, keyword
+	// store, lang, query, keyword. The id of a record is its index + 1
 	$db->seo = [[0,1,'product_id=1','tyre'], [0,1,'product_id=2','road.tyre'], [0,1,'category_id=10','moto'], [0,1,'category_id=11','enduro'],
 		[0,1,'manufacturer_id=5','heidenau'], [0,1,'information_id=4','about'], [0,1,'information/contact','contact'], [0,1,'product/search','search'],
 		[1,1,'product_id=3','foo'], [0,2,'product_id=1','shina'], [0,1,'product_id=6','tyre']];
@@ -61,9 +70,10 @@ function env($opts = []) {
 	$db->p2c = [1 => 11, 2 => 10, 9 => 111, 77 => 10];
 	$db->paths = [10 => '10', 11 => '10_11', 111 => implode('_', $deep), 30 => '30', 31 => '31', 32 => '31_32', 33 => '33'];
 	foreach ($deep as $i => $id) $db->paths[$id] = implode('_', array_slice($deep, 0, $i + 1));
+	ready:
 	$url = new Url($c->get('config_url'), $c->get('config_ssl'));
 	$req = new Request(); $req->get = $req->clean($opts['get'] ?? []); $req->post = $opts['post'] ?? []; $req->server = ($opts['server'] ?? []) + ['REQUEST_METHOD' => 'GET', 'REQUEST_URI' => '/'];
-	foreach (['config' => $c, 'db' => $db, 'cache' => new Cache(), 'url' => $url, 'request' => $req, 'response' => new Response(), 'session' => new Session(), 'load' => new Loader()] as $k => $v) $r->set($k, $v);
+	foreach (['config' => $c, 'db' => $db, 'cache' => $opts['cache'] ?? new Cache(), 'url' => $url, 'request' => $req, 'response' => new Response(), 'session' => new Session(), 'load' => new Loader()] as $k => $v) $r->set($k, $v);
 	return $r;
 }
 $fail = 0;
@@ -83,7 +93,7 @@ function run($uri, $method = 'GET', $opts = []) {
 function req($uri, $method = 'GET', $config = [], $server = [], $seo = []) { return run($uri, $method, ['config' => $config, 'server' => $server, 'seo' => $seo])[0]; }
 function link_($route, $args = '', $config = [], $seo = []) { [$r, $c] = boot(['config' => $config, 'seo' => $seo]); $c->index(); return $r->get('url')->link($route, $args); }
 // SQL of the request, by kind
-function sql($r, $kind) { $re = ['map' => '~FROM oc_seo_url WHERE store_id~', 'fallback' => '~FROM oc_seo_url WHERE keyword~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
+function sql($r, $kind) { $re = ['map' => "~FROM oc_seo_url WHERE store_id = '\d+' AND language_id = '\d+' ORDER BY~", 'fallback' => '~FROM oc_seo_url WHERE keyword~', 'max' => '~SELECT MAX\(seo_url_id\)~', 'verify' => '~AND keyword IN~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
 // Follows the redirects of a GET request. Returns [number of redirects, last result]; more than 5 redirects is a loop.
 function follow($uri, $opts = []) {
 	for ($n = 0; $n <= 5; $n++) {

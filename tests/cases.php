@@ -150,10 +150,10 @@ check('missing type delegates', $c->index(), 'delegated:startup/seo_url');
 echo "\n-- 1.6.3 F1: lookup methods, the search stops at the first unknown part\n";
 [$x, $r] = run('/' . implode('/', array_map(fn($i) => "u$i", range(1, 2000))));
 check('2000 unknown parts -> 404', $x['route'] ?? $x, 'error/not_found');
-check('2000 unknown parts: one fallback query and one map load', [sql($r, 'fallback'), sql($r, 'map'), sql($r, 'all')], [1, 1, 2]);
+check('2000 unknown parts: one fallback query, one map load, MAX(seo_url_id), no check of the map', [sql($r, 'fallback'), sql($r, 'map'), sql($r, 'max'), sql($r, 'verify'), sql($r, 'all')], [1, 1, 1, 0, 3]);
 [$x, $r] = run('/moto/unknown/' . implode('/', array_map(fn($i) => "x$i", range(1, 500))));
 check('known category, unknown part, long tail -> 404', $x['route'] ?? $x, 'error/not_found');
-check('the tail costs no queries', [sql($r, 'fallback'), sql($r, 'all')], [1, 2]);
+check('the tail costs no queries', [sql($r, 'fallback'), sql($r, 'all')], [1, 3]);
 [$x, $r] = run('/moto//enduro/'); check('empty inner part -> 404 without a query', [$x['route'] ?? $x, sql($r, 'fallback')], ['error/not_found', 0]);
 $whole = [[0,1,'information_id=7','docs/terms']];
 [$x, $r] = run('/docs/terms', 'POST', ['seo' => $whole]);
@@ -269,6 +269,65 @@ foreach (['/index.php?route=product/category&path=10&a%26b=1' => ['http://shop.t
 	[$n, $x] = follow($uri);
 	check('one 301, then the address is stable and the parameters are the same', [$n, params($x)], [1, $exp]);
 }
+
+echo "\n-- the map follows records written to seo_url past the models of the core\n";
+// warm(): a request that leaves the map in the cache. Then the table is changed and the next requests use the same table and cache
+function warm() { [, $r] = run('/moto/'); return ['db' => $r->get('db'), 'cache' => $r->get('cache')]; }
+function row($db, $keyword) { foreach ($db->seo as $i => $row) if ($row[0] == 0 && $row[1] == 1 && $row[3] === $keyword) return $i; throw new Exception("no keyword $keyword"); }
+$o = warm();
+[$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o);
+check('map from the cache: MAX(seo_url_id) and one check of the address, no map load', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'verify'), sql($r, 'map'), sql($r, 'fallback'), sql($r, 'all')], ['product/product', 1, 1, 0, 0, 2]);
+[$x, $r] = run('/index.php?route=product/product&path=10&product_id=77', 'GET', $o);
+check('address without keywords: MAX(seo_url_id) only', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'verify'), sql($r, 'map')], ['product/product', 1, 0, 0]);
+[$x, $r] = run('/nope/', 'GET', $o);
+check('unknown address: no check of the map', [$x['route'] ?? $x, sql($r, 'verify'), sql($r, 'map')], ['error/not_found', 0, 0]);
+
+$o = warm(); $o['db']->seo[] = [0,1,'product_id=77','fresh'];
+[$x, $r] = run('/moto/fresh.html', 'GET', $o);
+check('INSERT: the new keyword opens its page without a redirect', [$x['route'] ?? $x, $x['get']['product_id'] ?? null, sql($r, 'map')], ['product/product', '77', 1]);
+$o = warm(); $o['db']->seo[] = [0,1,'product_id=77','fresh'];
+[$r, $c] = boot($o); $c->index();
+check('INSERT: links get the new keyword at once', $r->get('url')->link('product/product', 'product_id=77'), 'http://shop.test/moto/fresh.html');
+check('INSERT: the address without the keyword is redirected to it', run('/index.php?route=product/product&path=10&product_id=77', 'GET', $o)[0], ['redirect' => 'http://shop.test/moto/fresh.html', 'status' => 301]);
+
+$o = warm(); $o['db']->seo[row($o['db'], 'heidenau')][3] = 'heidenau-tyres';
+[$x, $r] = run('/heidenau-tyres.html', 'GET', $o);
+check('UPDATE of a keyword: the new keyword opens without a redirect', [$x['route'] ?? $x, $x['get']['manufacturer_id'] ?? null, sql($r, 'map')], ['product/manufacturer/info', '5', 1]);
+$o = warm(); $o['db']->seo[row($o['db'], 'heidenau')][3] = 'heidenau-tyres';
+[$x, $r] = run('/heidenau.html', 'GET', $o);
+check('UPDATE of a keyword: the old keyword is 404, the map is built again', [$x['route'] ?? $x, sql($r, 'verify'), sql($r, 'map')], ['error/not_found', 1, 1]);
+[$r, $c] = boot($o); $c->index();
+check('UPDATE of a keyword: links use the new keyword after that', [$r->get('url')->link('product/manufacturer/info', 'manufacturer_id=5'), sql($r, 'map')], ['http://shop.test/heidenau-tyres.html', 0]);
+$o = warm(); $o['db']->seo[row($o['db'], 'heidenau')][3] = 'heidenau-tyres';
+check('UPDATE of a keyword: no 301 to the old keyword', run('/index.php?route=product/manufacturer/info&manufacturer_id=5', 'GET', $o)[0], ['redirect' => 'http://shop.test/heidenau-tyres.html', 'status' => 301]);
+
+$o = warm(); $o['db']->seo[row($o['db'], 'about')][2] = 'information_id=8';
+[$x, $r] = run('/about.html', 'GET', $o);
+check('UPDATE of a query: the keyword opens the new page', [$x['route'] ?? $x, $x['get']['information_id'] ?? null], ['information/information', '8']);
+
+$o = warm(); unset($o['db']->seo[row($o['db'], 'contact')]);
+[$x, $r] = run('/contact/', 'GET', $o);
+check('DELETE: the keyword is 404', [$x['route'] ?? $x, sql($r, 'map')], ['error/not_found', 1]);
+$o = warm(); unset($o['db']->seo[row($o['db'], 'contact')]);
+[$x, $r] = run('/index.php?route=information/contact', 'GET', $o);
+check('DELETE: the route is not redirected to the deleted keyword', [$x['route'] ?? $x, sql($r, 'map')], ['information/contact', 1]);
+$o = warm(); unset($o['db']->seo[row($o['db'], 'contact')]);
+[$x, $r] = run('/information/contact', 'GET', $o);
+check('DELETE: the address made of the route is 404 as without a keyword', $x['route'] ?? $x, 'error/not_found');
+$o = warm(); unset($o['db']->seo[row($o['db'], 'moto')]);
+[$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o);
+check('DELETE of a category keyword: the product address with it is 404', $x['route'] ?? $x, 'error/not_found');
+
+$o = warm(); $o['db']->seo[] = [0,2,'information_id=9','uber'];
+[$x, $r] = run('/uber.html', 'GET', $o);
+check('a new keyword of another language builds the map once', sql($r, 'map'), 1);
+[$x, $r] = run('/uber.html', 'GET', $o);
+check('a keyword of another language is not a reason to build the map again', [sql($r, 'map'), sql($r, 'fallback')], [0, 1]);
+$o = warm(); $map = $o['cache']->d['seo_pro.0.1']; unset($map['max_id']); $o['cache']->d['seo_pro.0.1'] = $map;
+[$x, $r] = run('/moto/', 'GET', $o);
+check('a map cached by an older version is built again', [$x['route'] ?? $x, sql($r, 'map'), isset($o['cache']->d['seo_pro.0.1']['max_id'])], ['product/category', 1, true]);
+[$x, $r] = run('/moto/', 'GET', $o);
+check('unchanged table: the map is not built again', [sql($r, 'map'), sql($r, 'max'), sql($r, 'verify')], [0, 1, 1]);
 
 echo "\nnotices: {$GLOBALS['notices']}, failed: $fail\n";
 if ($fail > 0 || $GLOBALS['notices'] > 0) http_response_code(500);
