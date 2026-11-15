@@ -1,7 +1,10 @@
 # Free SEO Pro for OpenCart
 Free extension to create clean URLs (also sometimes referred to as RESTful URLs, user-friendly URLs, pretty URLs or search engine-friendly URLs)
 
-[Download extension for OpenCart 3.0.5.1](https://github.com/sh1sh1n/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (this fork, version 1.7; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
+[Download extension for OpenCart 2.3.x.x](https://github.com/opencartbot/seo_pro/raw/main/seo_pro_oc23.ocmod.zip)<br/>
+[Download extension for OpenCart 3.0.5.1](https://github.com/opencartbot/seo_pro/raw/main/seo_pro_oc3.ocmod.zip) (version 1.7; the archive is built from `seo_pro_oc3.ocmod/`: `install.xml` and `upload/` at the root of the zip)
+
+Everything below describes the version for OpenCart 3.0.5.1. The version for OpenCart 2.3 is not changed: install its ocmod.zip, update the modification cache, then on tab Server of the store settings turn on "Use SEO URLs" and choose SEO type "SEO Pro".
 
 ## Using
 1. Make a backup of the files and the database.
@@ -41,7 +44,7 @@ On the first request after Refresh (in the admin or on the storefront) the modul
 
 If PHP runs with `opcache.validate_timestamps=0`, reset OPcache after Refresh. Otherwise PHP keeps running the old files.
 
-Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no longer used and can be deleted.
+Upgrade from 1.6: the old file `catalog/controller/startup/seo_pro.php` is no longer used and can be deleted. The controller is now `catalog/controller/extension/startup/seo_pro.php`, because the Installer of OpenCart 3.0.5.1 accepts files only in the allowed folders. Other modifications that patch the old file must patch the new one.
 
 ## HTML H1 and descriptions of manufacturers
 - Products, categories and information pages have the field HTML H1 on the tab General of every language, next to Meta Tag Title. A filled H1 replaces `heading_title` on the storefront, an empty one leaves the name (title). `0` is a filled H1. The limit is 255 characters of the stored text (an entity such as `&amp;` counts as five).
@@ -87,7 +90,9 @@ php tests/audit_seo_url.php /path/to/shop/config.php
 Do not install this version on a shop that needs such records.
 
 ## Compatible
-OpenCart 3.0.5.1. Tested on PHP 8.1, 8.3 and 8.5. PHP 8.0 and other OpenCart 3.0.x versions are not tested. The tests run on stubs and on the core files: see `tests/README.md` for what they do not cover.
+OpenCart 2.3: the version `seo_pro_oc23.ocmod`, not changed by 1.6.1–1.7.
+
+OpenCart 3.0.5.1: the version `seo_pro_oc3.ocmod`. Tested on PHP 8.1, 8.3 and 8.5. PHP 8.0 and other OpenCart 3.0.x versions are not tested. The tests run on stubs and on the core files: see `tests/README.md` for what they do not cover.
 
 ## Authors
 
@@ -99,6 +104,10 @@ Author: [Yesvik](http://opencartforum.ru/user/6876-yesvik/), 2011
 Opencart 3.x
 
 *   [eniarku](https://github.com/eniarku/)
+
+*   [opencartbot](https://github.com/opencartbot/)
+
+*   [sh1sh1n](https://github.com/sh1sh1n/) (1.6.1–1.7 for OpenCart 3.0.5.1)
 
 Opencart 2.x
 
