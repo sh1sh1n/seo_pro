@@ -643,12 +643,77 @@ class Seo_pro_schema {
 		return $values;
 	}
 
-	// A language id as a form or the model API sends it: a positive int or its decimal string within signed INT
-	private static function isId($value) {
-		if (is_int($value)) {
-			return $value >= 1 && $value <= 2147483647;
+	// The one rule of an id: a positive int, or a string of decimal digits, within signed INT. 0 for everything else.
+	// $zeros: whether the string may start with zeros, which are then ignored.
+	private static function id($value, $zeros) {
+		if (is_string($value) && preg_match($zeros ? '/^[0-9]+$/D' : '/^[1-9][0-9]*$/D', $value)) {
+			$value = ltrim($value, '0');
+			$value = (strlen($value) < 10 || (strlen($value) === 10 && strcmp($value, '2147483647') <= 0)) ? (int)$value : 0;
 		}
 
-		return is_string($value) && preg_match('/^[1-9][0-9]{0,9}$/D', $value) && (strlen($value) < 10 || strcmp($value, '2147483647') <= 0);
+		return (is_int($value) && $value >= 1 && $value <= 2147483647) ? $value : 0;
+	}
+
+	// An id as a form, the model API or seo_url.query has it: no leading zeros
+	public static function isId($value) {
+		return self::id($value, false) > 0;
+	}
+
+	// A category id of the product form: leading zeros are allowed. 0 for everything else.
+	public static function categoryId($value) {
+		return self::id($value, true);
+	}
+
+	// The categories of the product: valid ids, without duplicates, in the order they were sent.
+	// No key is an empty list; a key with anything but an array, null included, is a wrong call.
+	public static function productCategories($data) {
+		if (!is_array($data) || !array_key_exists('product_category', $data)) {
+			return array();
+		}
+
+		if (!is_array($data['product_category'])) {
+			throw new \InvalidArgumentException('SEO Pro: product_category must be an array');
+		}
+
+		$categories = array();
+
+		foreach ($data['product_category'] as $value) {
+			$category_id = self::categoryId($value);
+
+			if ($category_id && !in_array($category_id, $categories, true)) {
+				$categories[] = $category_id;
+			}
+		}
+
+		return $categories;
+	}
+
+	// Marks one of the saved categories of the product as the main one. Never creates a link.
+	public static function setMainCategory($db, $config, $product_id, $data) {
+		// The column main_category is not created yet
+		if ($config->get('seo_pro_schema_failed')) {
+			return;
+		}
+
+		$saved = array();
+
+		foreach ($db->query("SELECT category_id FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "'")->rows as $row) {
+			$saved[] = (int)$row['category_id'];
+		}
+
+		$categories = array_values(array_intersect(isset($data['product_category']) && is_array($data['product_category']) ? $data['product_category'] : array(), $saved));
+
+		if (!$categories) {
+			return;
+		}
+
+		$main_category_id = self::categoryId(isset($data['main_category_id']) ? $data['main_category_id'] : 0);
+
+		// No choice, or the chosen category is not a category of the product: the first one
+		if (!in_array($main_category_id, $categories, true)) {
+			$main_category_id = $categories[0];
+		}
+
+		$db->query("UPDATE " . DB_PREFIX . "product_to_category SET main_category = IF(category_id = '" . (int)$main_category_id . "', 1, 0) WHERE product_id = '" . (int)$product_id . "'");
 	}
 }

@@ -39,6 +39,7 @@ class DB {
 }
 // OpenCart loads the library with its autoloader
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_cache.php';
+require_once __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_schema.php';
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/catalog/controller/extension/startup/seo_pro.php';
 
 function env($opts = []) {

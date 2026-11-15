@@ -14,7 +14,7 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 |---|---|---|
 | OCMOD: `install.xml` applied to the core the way Refresh does | `php tests/ocmod_sim.php --check=install.xml <core with upload/> <out dir> $OC_DIR/system/modification.xml seo_pro_oc3.ocmod/install.xml` | exit code 1 |
 | Controller: links, decoding, redirects, cached paths in groups (a miss writes only its group, a group is read once per request) | `curl -f http://127.0.0.1:8765/cases.php` under `OC_DIR=... php -S 127.0.0.1:8765 -t tests` | HTTP 500 |
-| Schema installer | `php tests/test_schema.php` | exit code 1 |
+| Schema installer; the rule of an id: `Seo_pro_schema::isId()` without leading zeros, `categoryId()` with them | `php tests/test_schema.php` | exit code 1 |
 | Cache resets: every group of paths of both kinds, the keys of 1.7, the maps | `php tests/test_cache.php <out dir>` | exit code 1 |
 | Main category of a product: add, edit, copy | `php tests/test_product_categories.php <out dir>` | exit code 1 |
 | `audit_seo_url.php --tsv`: wrong input is never a clean result | `php tests/test_audit.php` | exit code 1 |
@@ -26,6 +26,7 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 | `install.xml` with other modifications: an extension with H1 in both INSERTs, in the add or the edit INSERT only (followed by `test_h1.php` on the result), with manufacturer descriptions, a removed anchor, Deals | `OC_DIR=... [DEALS_DIR=...] php tests/test_ocmod.php` | exit code 1 |
 
 - `<out dir>` holds the core files changed by `ocmod_sim.php`. Several tests run these files, so they test the code the shop will run.
+- The shop loads the libraries of `upload/system/library/` (`seo_pro_schema.php`, `seo_pro_cache.php`, `seo_pro_settings.php`) with its autoloader. The tests and `audit_seo_url.php` have no autoloader and `require` the files they need.
 - `ocmod_sim.php` ends with `SUMMARY <json>`. An operation whose search is not found and a missing file are failures. Language packs other than `en-gb` are optional: the core without `uk-ua` passes, the files are listed in `missing_optional_files`. Without `--check` every XML on the command line decides the exit code.
 - `cases.php` runs under the built-in server because the module does not redirect under the CLI SAPI. The answer is HTTP 500 when a check fails, PHP reports a warning or the run does not finish. Always call it with `curl -f`.
 - `run.sh` passes the controller part only when the PHP server it has started is alive, answers with the id of this run and the answer ends with the line `seo_pro cases finished <id>`. When the port is in use the part fails, also when the other server answers HTTP 200. By hand, check the last line of the answer yourself: HTTP 200 alone does not prove that `cases.php` was executed.

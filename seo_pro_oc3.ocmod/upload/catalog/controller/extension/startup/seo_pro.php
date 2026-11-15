@@ -250,6 +250,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 	/**
 	 * Keyword -> query. Only looks up: the request, the headers and the route are not touched.
+	 * The map is the one index() has loaded.
 	 *
 	 * @param bool $other_languages also look for the keyword of another language of this store, one SQL query
 	 *
@@ -257,8 +258,6 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	 */
 	private function getQueryByKeyword($keyword, $other_languages = false) {
 		$keyword = (string)$keyword;
-
-		$this->loadCache();
 
 		if (isset($this->cache_data['keywords'][$keyword])) {
 			return (string)$this->cache_data['keywords'][$keyword];
@@ -274,14 +273,12 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	}
 
 	/**
-	 * Query -> keyword of the current store and language, from the map only.
+	 * Query -> keyword of the current store and language, from the map index() or rewrite() has loaded.
 	 *
 	 * @return string|null null when the query has no keyword
 	 */
 	private function getKeywordByQuery($query) {
 		$query = (string)$query;
-
-		$this->loadCache();
 
 		if (isset($this->cache_data['queries'][$query])) {
 			return (string)$this->cache_data['queries'][$query];
@@ -303,11 +300,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		if (preg_match('/^(category_id|product_id|manufacturer_id|information_id)=([1-9][0-9]{0,9})$/D', $query, $match)) {
 			// The ids of the stock schema are signed INT
-			if (strlen($match[2]) === 10 && strcmp($match[2], '2147483647') > 0) {
-				return null;
-			}
-
-			return array('type' => $match[1], 'id' => $match[2]);
+			return Seo_pro_schema::isId($match[2]) ? array('type' => $match[1], 'id' => $match[2]) : null;
 		}
 
 		if (preg_match('/^[A-Za-z0-9_]+(?:\/[A-Za-z0-9_]+)*$/D', $query)) {
@@ -504,7 +497,8 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$https = $this->isHttps();
 
 		$base = $https ? $this->config->get('config_ssl') : $this->config->get('config_url');
-		$base = substr($base, 0, $this->strpos_offset('/', $base, 3) + 1);
+		// "https://host/": up to the third slash. A value with fewer slashes keeps its first character, as it always did.
+		$base = preg_match('~^(?:[^/]*/){3}~', $base, $match) ? $match[0] : substr($base, 0, 1);
 
 		$url = str_replace('&amp;', '&', $base . ltrim($this->request->server['REQUEST_URI'] ?? '', '/'));
 		$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
@@ -531,20 +525,6 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 	private function isHttps(): bool {
 		return !empty($this->request->server['HTTPS']) && strtolower((string)$this->request->server['HTTPS']) !== 'off';
-	}
-
-	private function strpos_offset($needle, $haystack, $occurrence) {
-		// explode the haystack
-		$arr = explode($needle, $haystack);
-		// check the needle is not out of bounds
-		switch($occurrence) {
-			case $occurrence == 0:
-				return false;
-			case $occurrence > max(array_keys($arr)):
-				return false;
-			default:
-				return strlen(implode($needle, array_slice($arr, 0, $occurrence)));
-		}
 	}
 
 	private function getQueryString($exclude = array()) {

@@ -8,6 +8,8 @@
 // Exit code 0: every record is supported; 1: there are unsupported records; 2: the check could not run.
 error_reporting(E_ALL);
 abstract class Controller {}
+// The shop loads the library with its autoloader: the controller takes the rule of an id from it
+require __DIR__ . '/../seo_pro_oc3.ocmod/upload/system/library/seo_pro_schema.php';
 require __DIR__ . '/../seo_pro_oc3.ocmod/upload/catalog/controller/extension/startup/seo_pro.php';
 $classify = new ReflectionMethod('ControllerExtensionStartupSeoPro', 'classifyQuery'); if (PHP_VERSION_ID < 80100) $classify->setAccessible(true);
 $controller = (new ReflectionClass('ControllerExtensionStartupSeoPro'))->newInstanceWithoutConstructor();

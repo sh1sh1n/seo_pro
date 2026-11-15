@@ -11,6 +11,7 @@ foreach (['DIR_IMAGE' => '/nonexistent/', 'HTTP_CATALOG' => 'http://shop.test/',
 require $OC . '/system/helper/utf8.php';
 require $OC . '/system/library/request.php';
 require $OC . '/system/storage/vendor/autoload.php';
+require dirname(__DIR__) . '/seo_pro_oc3.ocmod/upload/system/library/seo_pro_settings.php'; // the autoloader of the shop
 
 class Stop extends Exception {}
 // Models the test does not care about: lists are empty, everything else (an image, a title) is an empty string

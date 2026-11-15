@@ -218,5 +218,13 @@ $config = new Config(); $db = new DB(); $db->fail['GET_LOCK'] = $denied('GET_LOC
 Seo_pro_schema::startup($config, $db, new Log(), new Cache());
 check('nothing can be checked: every flag false, seo_pro_schema_failed true', [$config->d['seo_pro_schema_failed'], array_map(fn($f) => $config->d[$f], $flags)], [true, [false, false, false, false]]);
 
+echo "-- the rule of an id: isId() without leading zeros, categoryId() with them\n";
+// input, isId(), categoryId()
+foreach ([['007', false, 7], ['0', false, 0], ['2147483647', true, 2147483647], ['2147483648', false, 0], [' 1', false, 0], ['1 ', false, 0], [1.0, false, 0], [true, false, 0], [null, false, 0], [[], false, 0],
+	[-1, false, 0], [PHP_INT_MAX, false, 0], [0, false, 0], [1, true, 1], [2147483647, true, 2147483647], [2147483648, false, 0], ['1', true, 1], ['', false, 0], ['000', false, 0], ["1\n", false, 0], ['+1', false, 0], ['1e3', false, 0],
+	['1.0', false, 0], ['02147483647', false, 2147483647], ['02147483648', false, 0], ['9999999999', false, 0], ['99999999999', false, 0], [str_repeat('0', 40) . '5', false, 5]] as [$in, $is, $cat]) {
+	check('id ' . json_encode($in) . (is_float($in) ? ' (float)' : ''), [Seo_pro_schema::isId($in), Seo_pro_schema::categoryId($in)], [$is, $cat]);
+}
+
 echo "\nfailed: $fail\n";
 exit($fail ? 1 : 0);
