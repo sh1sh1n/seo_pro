@@ -208,7 +208,7 @@ check('getCapabilities before install: all false', (new Seo_pro_schema(new DB(),
 $flags = ['seo_pro_h1_product_ready', 'seo_pro_h1_category_ready', 'seo_pro_h1_information_ready', 'seo_pro_manufacturer_description_ready'];
 $config = new Config(); $config->d['seo_pro_schema_version'] = '1.7'; $db = new DB();
 Seo_pro_schema::startup($config, $db, new Log(), new Cache());
-check('stored version 1.7: no SQL, every flag set to true, seo_pro_schema_failed not set', [$db->log, $config->sets, array_map(fn($f) => $config->d[$f], $flags)], [[], $flags, [true, true, true, true]]);
+check('stored version 1.7: no SQL, every flag set to true, seo_pro_schema_failed not set', [$db->log, $config->sets, array_map(fn($f) => $config->d[$f], $flags)], [[], array_merge(['seo_pro_keyword_prefilter_mode'], $flags), [true, true, true, true]]);
 foreach (['no version' => null, 'version 1.6.1 of 1.6.3' => '1.6.1'] as $name => $v) {
 	$config = new Config(); $config->d['seo_pro_schema_version'] = $v; $db = new DB(); $db->fail['ALTER information_description'] = $denied('ALTER');
 	Seo_pro_schema::startup($config, $db, new Log(), new Cache());
@@ -226,5 +226,24 @@ foreach ([['007', false, 7], ['0', false, 0], ['2147483647', true, 2147483647], 
 	check('id ' . json_encode($in) . (is_float($in) ? ' (float)' : ''), [Seo_pro_schema::isId($in), Seo_pro_schema::categoryId($in)], [$is, $cat]);
 }
 
+
+class MetadataDB {
+    public $calls = 0; public $row; public $fail = false;
+    function query($sql) { $this->calls++; if ($sql !== "SHOW FULL COLUMNS FROM oc_seo_url LIKE 'keyword'") throw new LogicException('unexpected SQL'); if ($this->fail) throw new RuntimeException('private connection detail'); return new R($this->row ? [$this->row] : []); }
+}
+foreach (['utf8_general_ci' => 'ci', 'utf8mb4_unicode_ci' => 'ci', 'utf8mb4_0900_as_cs' => 'exact', 'utf8mb4_bin' => 'exact', 'unknown_ci' => 'exact', '' => 'exact'] as $collation => $expected) {
+    $db = new MetadataDB(); $db->row = ['Type' => 'varchar(255)', 'Collation' => $collation]; $config = new Config(); $log = new Log();
+    check('prefilter ' . $collation, Seo_pro_schema::keywordPrefilterMode($config, $db, $log), $expected);
+    Seo_pro_schema::keywordPrefilterMode($config, $db, $log);
+    check('metadata once ' . $collation, $db->calls, 1);
+    $config->set('seo_pro_schema_version', Seo_pro_schema::VERSION);
+    Seo_pro_schema::startup($config, $db, $log, new Cache());
+    check('startup resets mode even on version fast path', $config->get('seo_pro_keyword_prefilter_mode'), null);
+    check('startup did not read metadata', $db->calls, 1);
+}
+$db = new MetadataDB(); $db->fail = true; $config = new Config(); $log = new Log();
+check('metadata denied: exact', Seo_pro_schema::keywordPrefilterMode($config, $db, $log), 'exact');
+check('metadata error diagnostic has no exception detail', strpos(implode(' ', $log->l), 'private'), false);
+Seo_pro_schema::keywordPrefilterMode($config, $db, $log); check('failed metadata memoized', $db->calls, 1);
 echo "\nfailed: $fail\n";
 exit($fail ? 1 : 0);

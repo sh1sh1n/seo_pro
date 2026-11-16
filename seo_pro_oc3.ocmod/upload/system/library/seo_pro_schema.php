@@ -67,6 +67,7 @@ class Seo_pro_schema {
 	 * the schema is taken as ready. A column removed by hand under a stored version is not detected.
 	 */
 	public static function startup($config, $db, $log, $cache) {
+		$config->set('seo_pro_keyword_prefilter_mode', null);
 		if ($config->get('seo_pro_schema_version') === self::VERSION) {
 			$capabilities = array_fill_keys(self::capabilityNames(), true);
 		} else {
@@ -80,6 +81,23 @@ class Seo_pro_schema {
 		foreach (self::FLAGS as $name => $flag) {
 			$config->set($flag, !empty($capabilities[$name]));
 		}
+	}
+
+	// A request-local optimization only. Unknown metadata never changes exact ownership semantics.
+	public static function keywordPrefilterMode($config, $db, $log) {
+		$mode = $config->get('seo_pro_keyword_prefilter_mode');
+		if ($mode === 'ci' || $mode === 'exact') return $mode;
+		$mode = 'exact';
+		try {
+			$row = $db->query("SHOW FULL COLUMNS FROM " . DB_PREFIX . "seo_url LIKE 'keyword'")->row;
+			$type = strtolower((string)($row['Type'] ?? ''));
+			$collation = strtolower((string)($row['Collation'] ?? ''));
+			if (preg_match('/^(?:var)?char\(/', $type) && preg_match('/^utf8(?:mb3|mb4)?_(?:general_ci|unicode_ci|unicode_520_ci|0900_ai_ci|0900_as_ci)$/D', $collation)) $mode = 'ci';
+		} catch (\Throwable $e) {
+			if ($log) $log->write('SEO Pro: keyword collation metadata unavailable; exact ownership comparison is used');
+		}
+		$config->set('seo_pro_keyword_prefilter_mode', $mode);
+		return $mode;
 	}
 
 	/**
