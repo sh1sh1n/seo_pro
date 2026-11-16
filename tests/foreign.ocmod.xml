@@ -3,6 +3,7 @@
      of the core the way blog extensions do, in index() and in rewrite() of catalog/controller/startup/seo_url.php.
      - note_id=N: the page extension/notes/note;
      - note_topic_id=N: nested topics, the parameter of the links is topic_path=1_2, the page extension/notes/topic;
+       like "path" of the core and the parameter of real blog extensions, topic_path is read in a link of any route;
      - offer_id=N: follows the keyword of the route extension/notes/offers, the page extension/notes/offer. -->
 <modification>
     <name>Synthetic notes</name>
@@ -62,7 +63,7 @@
 
 						unset($data[$key]);
 					}
-				} elseif (($data['route'] == 'extension/notes/note' || $data['route'] == 'extension/notes/topic') && $key == 'topic_path') {
+				} elseif ($key == 'topic_path') {
 					$topics = '';
 
 					foreach (explode('_', $value) as $topic) {

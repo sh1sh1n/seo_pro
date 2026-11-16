@@ -27,6 +27,12 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	// rewrite() of the core is running
 	private $core_busy = false;
 
+	// rewrite() of the core has built an address since the flag was cleared
+	private $core_used = false;
+
+	// Links are built without the router of the core
+	private $core_off = false;
+
 	// The ids the core itself reads from seo_url.query
 	private $own_keys = array('category_id', 'product_id', 'manufacturer_id', 'information_id');
 
@@ -103,9 +109,9 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			if ($page === null) {
 				$this->request->get['route'] = 'error/not_found';
 			} else {
-				foreach ($page['params'] as $key => $value) {
-					$this->request->get[$key] = $value;
-				}
+				// The parameters of the page come first, in the order of the address: a modification of the core
+				// writes the parts of a link in the order of its parameters, the visitor must not choose it
+				$this->request->get = $page['params'] + $this->request->get;
 
 				$this->request->get['route'] = $page['route'];
 
@@ -272,7 +278,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		// The store has records of other extensions, and the link has parameters one of them may own.
 		// Asked before the keyword of the route itself: such an extension may build "/list/item" from a route and an id
-		if ($data && !empty($this->cache_data['foreign']) && !isset($this->page_routes[$route])) {
+		if ($data && !$this->core_off && !empty($this->cache_data['foreign']) && !isset($this->page_routes[$route])) {
 			$seo_url = $this->rewriteByCore($base, $route, $data);
 
 			if ($seo_url !== null) {
@@ -642,7 +648,40 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			}
 		}
 
-		return ($this->core_links[$key] === false) ? null : $this->core_links[$key];
+		if ($this->core_links[$key] === false) {
+			return null;
+		}
+
+		$this->core_used = true;
+
+		return $this->core_links[$key];
+	}
+
+	/**
+	 * An address rewrite() of the core has built opens the given route. A modification may turn a parameter
+	 * into keywords in a link of any route and drop the route, as the core does with "path":
+	 * "index.php?route=checkout/cart&blog_path=1" then becomes the address of a blog category.
+	 *
+	 * @param string $seo_url an address of this store
+	 */
+	private function opensRoute($seo_url, $route) {
+		$path = (string)parse_url($seo_url, PHP_URL_PATH);
+
+		$base = (string)parse_url((string)$this->config->get('config_url'), PHP_URL_PATH);
+
+		if ($base !== '' && strpos($path, $base) === 0) {
+			$path = substr($path, strlen($base));
+		}
+
+		$path = rawurldecode(ltrim($path, '/'));
+
+		if ($path === '') {
+			return false;
+		}
+
+		$page = $this->resolveByCore($path);
+
+		return $page !== null && $page['route'] === $route;
 	}
 
 	/**
@@ -853,6 +892,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		$url = str_replace('&amp;', '&', $base . ltrim($this->request->server['REQUEST_URI'] ?? '', '/'));
 		$this->hits = array();
+		$this->core_used = false;
 
 		$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
 
@@ -866,6 +906,21 @@ class ControllerExtensionStartupSeoPro extends Controller {
 				$this->loadCache(true);
 
 				$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
+
+				if (urldecode($url) == urldecode($seo)) {
+					return;
+				}
+			}
+
+			// The address comes from the router of the core: a parameter of the visitor must not send the request to another page
+			if ($this->core_used && !$this->opensRoute($seo, $this->request->get['route'])) {
+				$this->core_off = true;
+
+				try {
+					$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
+				} finally {
+					$this->core_off = false;
+				}
 
 				if (urldecode($url) == urldecode($seo)) {
 					return;

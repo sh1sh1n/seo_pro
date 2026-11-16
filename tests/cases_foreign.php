@@ -133,6 +133,27 @@ if ($patched) {
 	[$x] = freq('/index.php?route=extension/notes/note&note_id=5', 'HEAD'); check('HEAD plain address of a note: 301', $x['status'] ?? $x, 301);
 	[$x] = freq('/index.php?route=extension/feed/google_base&note_id=5'); check('feed: no 301', $x['route'] ?? $x, 'extension/feed/google_base');
 
+	echo "\n-- a parameter the extension reads in a link of any route does not send the visitor to another page\n";
+	// rewrite() of the extension turns topic_path of any route into the keywords of topics and drops the route, as blog extensions do
+	foreach (['/index.php?route=checkout/cart&topic_path=1', '/index.php?route=account/order/info&order_id=7&topic_path=1_2', '/index.php?route=product/product/review&product_id=1&topic_path=1',
+		'/index.php?route=extension/notes/offers&topic_path=1' => 'offers/?topic_path=1', '/index.php?route=product/search&search=a&topic_path=1' => 'search/?search=a&topic_path=1', '/search/?search=a&topic_path=1',
+		'/offers/?topic_path=1', '/moto/?topic_path=1', '/moto/enduro/tyre.html?topic_path=1', '/?topic_path=1', '/index.php?route=checkout/cart&topic_path=9'] as $uri => $location) {
+		if (is_int($uri)) { $uri = $location; [$n, $x] = follow($uri, ['seo' => $F]); check("no redirect: $uri", [$n, isset($x['route']) && $x['route'] !== 'error/not_found' && strpos($x['route'], 'extension/notes/') !== 0 || $x['route'] === 'extension/notes/offers'], [0, true]); continue; }
+		check("301 to the keyword of the route, not to a topic: $uri", freq($uri)[0], ['redirect' => $S . $location, 'status' => 301]);
+		[$n, $x] = follow($uri, ['seo' => $F]); check('one 301, then the address is stable', [$n, isset($x['route'])], [1, true]);
+	}
+	[$x] = freq('/index.php?route=checkout/cart&topic_path=1'); check('the route and the parameter are kept', [$x['route'] ?? $x, $x['get']['topic_path'] ?? null], ['checkout/cart', '1']);
+	check('the pages of the extension are still redirected to their keywords', [freq('/index.php?route=extension/notes/topic&topic_path=1_2')[0], freq('/index.php?route=extension/notes/note&topic_path=1&note_id=5')[0]],
+		[['redirect' => $S . 'guides/tyres-guide', 'status' => 301], ['redirect' => $S . 'guides/my-note', 'status' => 301]]);
+	// The extension writes the parts of an address in the order of the parameters of the link
+	foreach (['/guides/tyres-guide/my-note?note_id=5&topic_path=1', '/guides/tyres-guide/my-note?note_id=6&topic_path=9&x=1' => '?x=1', '/guides/tyres-guide/my-note?topic_path=1&note_id=5'] as $uri => $rest) {
+		if (is_int($uri)) { $uri = $rest; $rest = ''; }
+		check("parameters of the visitor do not reorder the address: $uri", freq($uri)[0], ['redirect' => $S . 'guides/tyres-guide/my-note' . $rest, 'status' => 301]);
+	}
+	[$x, $r] = freq('/index.php?route=checkout/cart&topic_path=1_2'); $n = sql($r, 'core');
+	check('the check costs the queries of the core for the parts of the address it has built', [$x['route'] ?? $x, $n], ['checkout/cart', 4]);
+	[$x, $r] = freq('/index.php?route=checkout/cart&order_id=7'); check('a link the core does not change costs no query', [$x['route'] ?? $x, sql($r, 'core')], ['checkout/cart', 0]);
+
 	echo "\n-- queries\n";
 	[, $r] = freq('/moto/'); $o = ['db' => $r->get('db'), 'cache' => $r->get('cache')];
 	[$x, $r] = run('/my-note', 'GET', $o);
