@@ -150,6 +150,15 @@ if ($patched) {
 		if (is_int($uri)) { $uri = $rest; $rest = ''; }
 		check("parameters of the visitor do not reorder the address: $uri", freq($uri)[0], ['redirect' => $S . 'guides/tyres-guide/my-note' . $rest, 'status' => 301]);
 	}
+	// A parameter of the visitor with the name of a parameter of the extension stays a parameter of the query string
+	foreach (['/my-note?topic_path=9' => ['9', '5'], '/my-note?topic_path=1' => ['1', '5'], '/guides?note_id=6' => ['1', '6'], '/my-note?x=1&topic_path=1_2' => ['1_2', '5']] as $uri => $exp) {
+		[$x] = freq($uri); check("no redirect, the parameter is kept: $uri", [$x['get']['topic_path'] ?? $x, $x['get']['note_id'] ?? null], $exp);
+	}
+	foreach (['/my-note?note_id=5&topic_path=1' => 'my-note?topic_path=1', '/my-note?topic_path=9&note_id=6' => 'my-note?topic_path=9', '/guides/my-note?topic_path=9&x=1' => 'guides/my-note?x=1',
+		'/my-note/?topic_path=9' => 'my-note?topic_path=9', '/moto/my-note?topic_path=1' => 'my-note?path=10&topic_path=1'] as $uri => $location) {
+		check("301: $uri", freq($uri)[0], ['redirect' => $S . $location, 'status' => 301]);
+		[$n, $x] = follow($uri, ['seo' => $F]); check('one 301, then the address is stable', [$n, $x['route'] ?? $x], [1, 'extension/notes/note']);
+	}
 	[$x, $r] = freq('/index.php?route=checkout/cart&topic_path=1_2'); $n = sql($r, 'core');
 	check('the check costs the queries of the core for the parts of the address it has built', [$x['route'] ?? $x, $n], ['checkout/cart', 4]);
 	[$x, $r] = freq('/index.php?route=checkout/cart&order_id=7'); check('a link the core does not change costs no query', [$x['route'] ?? $x, sql($r, 'core')], ['checkout/cart', 0]);

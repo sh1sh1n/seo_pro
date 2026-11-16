@@ -33,6 +33,9 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	// Links are built without the router of the core
 	private $core_off = false;
 
+	// The names of the parameters the router of the core has set for the address of this request; null for every other request
+	private $core_params = null;
+
 	// The ids the core itself reads from seo_url.query
 	private $own_keys = array('category_id', 'product_id', 'manufacturer_id', 'information_id');
 
@@ -102,6 +105,10 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			// An address with a record of another extension is a page only when the router of the core, as modified, says so
 			if ($page !== null && isset($page['core'])) {
 				$page = $this->resolveByCore($route);
+
+				if ($page !== null) {
+					$this->core_params = array_keys($page['params']);
+				}
 			}
 
 			// Nothing is written to the request before the whole address is resolved,
@@ -894,7 +901,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$this->hits = array();
 		$this->core_used = false;
 
-		$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
+		$seo = $this->getCanonical($https);
 
 		$hits = $this->hits;
 		$this->hits = null;
@@ -905,7 +912,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			if (!$this->isMapCurrent($hits)) {
 				$this->loadCache(true);
 
-				$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
+				$seo = $this->getCanonical($https);
 
 				if (urldecode($url) == urldecode($seo)) {
 					return;
@@ -917,7 +924,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 				$this->core_off = true;
 
 				try {
-					$seo = str_replace('&amp;', '&', $this->url->link($this->request->get['route'], $this->getQueryString(array('route')), $https));
+					$seo = $this->getCanonical($https);
 				} finally {
 					$this->core_off = false;
 				}
@@ -947,6 +954,33 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 	private function isHttps(): bool {
 		return !empty($this->request->server['HTTPS']) && strtolower((string)$this->request->server['HTTPS']) !== 'off';
+	}
+
+	/**
+	 * The address of the page of this request with its parameters.
+	 * A page of the router of the core is built from the parameters the core has read in the address, and the parameters
+	 * of the visitor follow as a query string: a modification of the core may turn any of its parameters into a part
+	 * of the address, or drop the address when one of them has no keyword.
+	 */
+	private function getCanonical($https) {
+		$route = $this->request->get['route'];
+
+		if ($this->core_params === null) {
+			return str_replace('&amp;', '&', $this->url->link($route, $this->getQueryString(array('route')), $https));
+		}
+
+		$page = array_intersect_key($this->request->get, array_flip($this->core_params));
+		unset($page['route']);
+
+		$seo = str_replace('&amp;', '&', $this->url->link($route, http_build_query($this->decodeQuery($page), '', '&'), $https));
+
+		$rest = $this->getQueryString(array_merge(array('route'), $this->core_params));
+
+		if ($rest !== '') {
+			$seo .= ((strpos($seo, '?') === false) ? '?' : '&') . $rest;
+		}
+
+		return $seo;
 	}
 
 	private function getQueryString($exclude = array()) {
