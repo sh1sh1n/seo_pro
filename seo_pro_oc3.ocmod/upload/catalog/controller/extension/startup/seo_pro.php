@@ -798,6 +798,90 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$this->cache_data = $cache_data;
 	}
 
+	private $product_addresses = array();
+	private $product_categories = array();
+
+	private function addressContext() {
+		return (int)$this->config->get('config_store_id') . ':' . (int)$this->config->get('config_language_id') . ':';
+	}
+
+	// The self-JOIN includes every query type. Only the optional CI prefilter changes with metadata.
+	private function addressAliasJoin($query) {
+		$store = (int)$this->config->get('config_store_id');
+		$language = (int)$this->config->get('config_language_id');
+		$ci = Seo_pro_schema::keywordPrefilterMode($this->config, $this->db, $this->log) === 'ci';
+		return " LEFT JOIN " . DB_PREFIX . "seo_url su ON su.store_id = " . $store . " AND su.language_id = " . $language .
+			" AND su.`query` = " . $query . " AND CAST(su.`query` AS BINARY) = CAST(" . $query . " AS BINARY)" .
+			" LEFT JOIN " . DB_PREFIX . "seo_url d ON d.store_id = su.store_id AND d.language_id = su.language_id" .
+			($ci ? " AND d.keyword = su.keyword" : "") .
+			" AND CAST(LOWER(d.keyword) AS BINARY) = CAST(LOWER(su.keyword) AS BINARY) AND d.seo_url_id < su.seo_url_id";
+	}
+
+	private function selectOwnedKeyword($rows, $query) {
+		$candidates = array();
+		foreach ($rows as $row) {
+			if ($row['alias_id'] === null || $row['alias_query'] !== $query) continue;
+			$id = (int)$row['alias_id'];
+			if (!isset($candidates[$id])) $candidates[$id] = array('keyword' => $row['alias_keyword'], 'blocked' => false);
+			if ($row['earlier_alias_id'] !== null) $candidates[$id]['blocked'] = true;
+		}
+		ksort($candidates, SORT_NUMERIC);
+		$keyword = null;
+		foreach ($candidates as $candidate) if (!$candidate['blocked']) $keyword = $candidate['keyword'];
+		return $keyword;
+	}
+
+	private function readProductAddressData($product_id) {
+		$key = $this->addressContext() . $product_id;
+		if (array_key_exists($key, $this->product_addresses)) return $this->product_addresses[$key];
+		$pc = !$this->config->get('seo_pro_schema_failed');
+		$sql = "SELECT p.product_id, " . ($pc ? "pc.category_id, pc.main_category" : "NULL AS category_id, 0 AS main_category") .
+			", su.seo_url_id AS alias_id, su.`query` AS alias_query, LOWER(su.keyword) AS alias_keyword, d.seo_url_id AS earlier_alias_id" .
+			" FROM (SELECT " . (int)$product_id . " AS product_id) p" .
+			($pc ? " LEFT JOIN " . DB_PREFIX . "product_to_category pc ON pc.product_id = p.product_id" : "") .
+			$this->addressAliasJoin("CONCAT('product_id=', p.product_id)") .
+			" ORDER BY su.seo_url_id" . ($pc ? ", pc.category_id" : "") . ", d.seo_url_id";
+		$rows = $this->db->query($sql)->rows;
+		$main = array();
+		foreach ($rows as $row) if ($row['category_id'] !== null && (int)$row['main_category'] === 1) $main[(int)$row['category_id']] = true;
+		return $this->product_addresses[$key] = array('keyword' => $this->selectOwnedKeyword($rows, 'product_id=' . (int)$product_id), 'main_category_id' => count($main) === 1 ? (int)key($main) : null);
+	}
+
+	private function readProductCategoryData($category_id) {
+		$key = $this->addressContext() . $category_id;
+		if (array_key_exists($key, $this->product_categories)) return $this->product_categories[$key];
+		$store = (int)$this->config->get('config_store_id');
+		$language = (int)$this->config->get('config_language_id');
+		$sql = "SELECT root.category_id AS requested_category_id, cp.path_id, cp.level, c.category_id AS existing_category_id, c.parent_id, c.status," .
+			" cs.store_id AS available_store_id, cd.category_id AS translated_category_id, su.seo_url_id AS alias_id, su.`query` AS alias_query," .
+			" LOWER(su.keyword) AS alias_keyword, d.seo_url_id AS earlier_alias_id FROM (SELECT " . (int)$category_id . " AS category_id) root" .
+			" LEFT JOIN " . DB_PREFIX . "category_path cp ON cp.category_id = root.category_id" .
+			" LEFT JOIN " . DB_PREFIX . "category c ON c.category_id = cp.path_id" .
+			" LEFT JOIN " . DB_PREFIX . "category_to_store cs ON cs.category_id = cp.path_id AND cs.store_id = " . $store .
+			" LEFT JOIN " . DB_PREFIX . "category_description cd ON cd.category_id = cp.path_id AND cd.language_id = " . $language .
+			$this->addressAliasJoin("CONCAT('category_id=', cp.path_id)") .
+			" ORDER BY cp.level, su.seo_url_id, d.seo_url_id";
+		$rows = $this->db->query($sql)->rows;
+		$result = array('valid' => false, 'path' => '', 'keywords' => array());
+		$segments = array(); $levels = array();
+		foreach ($rows as $row) {
+			if ($row['path_id'] === null || $row['existing_category_id'] === null || (int)$row['status'] !== 1 || $row['available_store_id'] === null || $row['translated_category_id'] === null) return $this->product_categories[$key] = $result;
+			$id = (int)$row['path_id']; $level = (int)$row['level'];
+			if ((isset($levels[$level]) && $levels[$level] !== $id) || (isset($segments[$id]) && (int)$segments[$id]['level'] !== $level)) return $this->product_categories[$key] = $result;
+			$levels[$level] = $id; $segments[$id] = $row;
+		}
+		ksort($levels, SORT_NUMERIC); $parent = 0; $level = 0;
+		foreach ($levels as $n => $id) {
+			if ($n !== $level++ || (int)$segments[$id]['parent_id'] !== $parent) return $this->product_categories[$key] = $result;
+			$parent = $id;
+		}
+		if (!$levels || $parent !== (int)$category_id) return $this->product_categories[$key] = $result;
+		$result['valid'] = true;
+		$result['path'] = implode('_', $levels);
+		foreach ($levels as $id) $result['keywords'][] = $this->selectOwnedKeyword(array_values(array_filter($rows, function ($row) use ($id) { return (int)$row['path_id'] === $id; })), 'category_id=' . $id);
+		return $this->product_categories[$key] = $result;
+	}
+
 	private function getPathByProduct($product_id) {
 		$product_id = (int)$product_id;
 		if ($product_id < 1) return false;

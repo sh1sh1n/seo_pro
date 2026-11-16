@@ -2,6 +2,17 @@
 require __DIR__ . '/test_seo_pro.php';
 function nav($opts = []) { [$r, $c] = boot($opts); $r->get('url')->addRewrite($c); return [$r, $c]; }
 function href($r, $id, $extras = []) { return $r->get('url')->link('product/product', ['product_id' => $id] + $extras); }
+if (in_array('--address-data', $argv ?? [], true)) {
+    [$r, $c] = nav();
+    check('current product keyword and explicit main', call($c, 'readProductAddressData', 1), ['keyword' => 'tyre', 'main_category_id' => 11]);
+    check('real hierarchy', call($c, 'readProductCategoryData', 11), ['valid' => true, 'path' => '10_11', 'keywords' => ['moto', 'enduro']]);
+    $r->get('db')->seo[] = [0,1,'product_id=1','',900];
+    [$r, $c] = nav(['db' => $r->get('db')]);
+    check('empty last alias distinct from null', call($c, 'readProductAddressData', 1)['keyword'], '');
+    check('negative result memoized', call($c, 'readProductAddressData', 888)['keyword'], null);
+    $n = count($r->get('db')->log); call($c, 'readProductAddressData', 888); check('negative adds no SQL', count($r->get('db')->log), $n);
+    echo "notices: $notices, failed: $fail\n"; exit($fail || $notices ? 1 : 0);
+}
 [$r, $c] = nav(); $before = $r->get('request')->get;
 check('general product href', href($r, 1, ['manufacturer_id' => 5, 'sort' => 'p.price', 'order' => 'ASC', 'page' => 2, 'limit' => 20, 'utm_source' => 'a&b', 'custom' => ['x' => 'a+b']]), 'http://shop.test/moto/enduro/tyre.html?utm_source=a%26b&amp;custom%5Bx%5D=a%2Bb');
 check('generation leaves Request intact', $r->get('request')->get, $before);
