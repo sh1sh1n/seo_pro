@@ -42,7 +42,10 @@ foreach (['product', 'category', 'information'] as $e) {
 	check("$e model: H1 prepared in add and in edit, before the first query of each", preg_match_all('~public function (add|edit)' . ucfirst($e) . '\([^)]*\) \{(?:(?!\$this->db->query).)*Seo_pro_schema::prepareH1~s', $model), 2);
 	check("$e model: meta_h1 in get*Descriptions once", preg_match_all("~'meta_h1'\s*=>~", $model), 1);
 	check("$e form: one H1 field", substr_count(file_of($x, "admin/view/template/catalog/{$e}_form.twig"), "_description[{{ language.language_id }}][meta_h1]\""), 1);
-	foreach (['en-gb', 'ru-ru'] as $l) check("$e language $l: the strings", substr_count(file_of($x, "admin/language/$l/catalog/$e.php"), "\$_['error_seo_pro_h1_schema']"), 1);
+	foreach (['en-gb', 'ru-ru'] as $l) {
+		if ($l !== 'en-gb' && !is_file($OC . "/admin/language/$l/catalog/$e.php")) { echo "not run $e language $l: optional pack absent\n"; continue; }
+		check("$e language $l: the strings", substr_count(file_of($x, "admin/language/$l/catalog/$e.php"), "\$_['error_seo_pro_h1_schema']"), 1);
+	}
 }
 $m = file_of($x, 'admin/model/catalog/manufacturer.php');
 check('manufacturer model: saved in add and in edit, deleted, read', [substr_count($m, 'Seo_pro_schema::prepareManufacturer'), substr_count($m, 'Seo_pro_schema::saveManufacturer'), substr_count($m, 'Seo_pro_schema::deleteManufacturer'), substr_count($m, 'function getManufacturerDescriptions(')], [2, 2, 1, 1]);
