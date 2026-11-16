@@ -38,5 +38,33 @@ foreach ([0,1,3] as $k) {
     $count = count($db->log); for ($i = 200; $i < 220; $i++) href($r, $i);
     check("20 products K=$k repeat SQL", count($db->log) - $count, 0);
 }
+
+foreach (['product_id=90','category_id=90','manufacturer_id=90','information_id=90','product/search','foreign_id=90','product_id=bad'] as $owner) {
+    [$r, $c] = nav(); $r->get('db')->seo = [[0,1,$owner,'SAME',1],[0,1,'product_id=1','same',2]];
+    check('first owner ' . $owner, href($r,1), 'http://shop.test/index.php?route=product/product&amp;path=10_11&amp;product_id=1');
+}
+[$r, $c] = nav(); $db = $r->get('db'); $db->seo[] = [0,1,'product_id=1','new-name',100]; $db->seo[] = [0,1,'product_id=1','tyre',101];
+check('last unblocked alias; duplicate does not replace', href($r,1), 'http://shop.test/moto/enduro/new-name.html');
+[$r, $c] = nav(['config' => ['seo_pro_schema_failed' => true]]);
+check('known missing main column: short URL', href($r,1), 'http://shop.test/tyre.html');
+check('missing main column: no pc JOIN', count(preg_grep('/JOIN oc_product_to_category/', $r->get('db')->log)), 0);
+foreach (['cycle' => '11_10', 'missing root' => '11', 'missing ancestor' => '999_11'] as $label => $path) {
+    [$r, $c] = nav(); $r->get('db')->paths[11] = $path;
+    check($label . ' hierarchy short fallback', href($r,1), 'http://shop.test/tyre.html');
+}
+[$r, $c] = nav(['config' => ['config_seo_url_include_path' => 0]]);
+check('path setting off: no hierarchy SQL', href($r,1), 'http://shop.test/tyre.html'); check('path off K=0', sql($r,'category_address'), 0);
+[$r, $c] = nav(); $db = $r->get('db'); $cache = $r->get('cache'); href($r,1);
+$db->main[1] = [10 => 1]; $db->seo[2][3] = 'renamed-root';
+[$next, $c] = nav(['db' => $db, 'cache' => $cache]);
+check('next request sees main and category keyword change', href($next,1), 'http://shop.test/renamed-root/tyre.html');
+$db->seo[0][3] = 'new-product'; [$next, $c] = nav(['db' => $db, 'cache' => $cache]);
+check('next request sees product rename', href($next,1), 'http://shop.test/renamed-root/new-product.html');
+unset($db->seo[0]); [$next, $c] = nav(['db' => $db, 'cache' => $cache]);
+check('next request sees product keyword deletion', href($next,1), 'http://shop.test/index.php?route=product/product&amp;path=10&amp;product_id=1');
+$n = count($db->log); href($next,1); check('negative keyword repeat SQL', count($db->log) - $n, 0);
+[$r, $c] = nav(); $before = href($r,1); $r->get('config')->set('config_language_id',2);
+check('language context is independent', href($r,1), 'http://shop.test/index.php?route=product/product&amp;path=10_11&amp;product_id=1');
+// The language-2 category aliases are absent; the hierarchy itself is available in these fixtures.
 echo "notices: $notices, failed: $fail\n";
 exit($fail || $notices ? 1 : 0);

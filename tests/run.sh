@@ -48,6 +48,10 @@ part 'controller, foreign records, modified core (cases_foreign.php)' controller
 part 'controller, foreign records, unmodified core (cases_foreign.php)' controller 'cases_foreign.php?core=stock'
 kill "$SERVER" 2>/dev/null; SERVER=
 
+part 'product navigation (Url, fallback, SQL budgets)' env OC_DIR="$OC_DIR" "$PHP" "$ROOT/tests/test_product_navigation.php"
+part 'product navigation (own HTTP server, stock card and model)' env OC_DIR="$OC_DIR" "$PHP" "$ROOT/tests/test_product_navigation_http.php"
+echo 'not run stand MySQL/HTTP: run explicit stand modes after verifying the installed build'
+
 part 'schema' "$PHP" "$ROOT/tests/test_schema.php"
 part 'cache resets' "$PHP" "$ROOT/tests/test_cache.php" "$TMP/out"
 part 'product categories' "$PHP" "$ROOT/tests/test_product_categories.php" "$TMP/out"

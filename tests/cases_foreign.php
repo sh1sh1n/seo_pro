@@ -174,7 +174,7 @@ if ($patched) {
 	check('note, map from the cache: MAX(seo_url_id), the check of the map, one query of the core for the address and one for the canonical link', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'verify'), sql($r, 'map'), sql($r, 'fallback'), sql($r, 'core'), sql($r, 'all')], ['extension/notes/note', 1, 1, 0, 0, 2, 4]);
 	[$x, $r] = run('/guides/tyres-guide/my-note', 'GET', $o);
 	check('three parts: three queries for the address, three for the link', [sql($r, 'core'), sql($r, 'all')], [6, 8]);
-	[$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o); check('product address in this store: two queries, as without foreign records', [sql($r, 'core'), sql($r, 'all')], [0, 2]);
+	[$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o); check('product address: current address reads, no foreign SQL', [sql($r, 'core'), sql($r, 'all')], [0, 5]);
 
 	echo "\n-- the map follows foreign records written past the models of the core\n";
 	function fwarm($seo) { [, $r] = run('/moto/', 'GET', ['seo' => $seo]); return ['db' => $r->get('db'), 'cache' => $r->get('cache')]; }
