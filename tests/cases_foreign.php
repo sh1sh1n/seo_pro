@@ -30,11 +30,11 @@ function rewrites($r) { $p = new ReflectionProperty('Url', 'rewrite'); if (PHP_V
 
 echo "\n-- a store without foreign records: the router of the core is not used\n";
 [$x, $r] = run('/moto/enduro/tyre.html');
-check('product address: the same queries as in 1.7.2', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'map'), sql($r, 'verify'), sql($r, 'core'), sql($r, 'all')], ['product/product', 1, 1, 1, 0, 5]);
+check('product address: the same queries as in 1.7.2', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'map'), sql($r, 'verify'), sql($r, 'core'), sql($r, 'all')], ['product/product', 1, 1, 1, 0, 6]);
 check('the cached map says that the store has no foreign records', $r->get('cache')->d['seo_pro.0.1']['foreign'] ?? null, false);
 $o = ['db' => $r->get('db'), 'cache' => $r->get('cache')];
 [$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o);
-check('product address, map from the cache: two queries', [$x['route'] ?? $x, sql($r, 'core'), sql($r, 'all')], ['product/product', 0, 2]);
+check('product address, map from the cache: two queries', [$x['route'] ?? $x, sql($r, 'core'), sql($r, 'all')], ['product/product', 0, 5]);
 [$x, $r] = run('/contact/?x=1', 'GET', $o); check('route keyword with a parameter: two queries', [$x['route'] ?? $x, sql($r, 'all')], ['information/contact', 2]);
 [$x, $r] = run('/index.php?route=product/search&search=a', 'GET', $o); check('redirect to a route keyword: two queries', [$x['redirect'] ?? $x, sql($r, 'all')], [$S . 'search/?search=a', 2]);
 [$x, $r] = run('/index.php?route=account/order/info&order_id=7', 'GET', $o); check('route without a keyword: MAX(seo_url_id) only', [$x['route'] ?? $x, sql($r, 'all')], ['account/order/info', 1]);

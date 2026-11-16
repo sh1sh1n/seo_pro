@@ -82,7 +82,11 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 		// Decode URL
 		if (!isset($this->request->get['_route_'])) {
-			$this->validate();
+			if (($this->request->get['route'] ?? null) === 'product/product' && $this->isRedirectable()) {
+				$this->handleProductGetHead($this->request->get);
+			} else {
+				$this->validate();
+			}
 		} else {
 			$route = $this->request->get['_route_'];
 			unset($this->request->get['_route_']);
@@ -123,13 +127,19 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 				$this->request->get['route'] = $page['route'];
 
+				$original_request = $this->request->get;
+
 				if ($page['route'] === 'product/product' && isset($this->request->get['product_id']) && !isset($this->request->get['path'])) {
 					$path = $this->getPathByProduct($this->request->get['product_id']);
 					if ($path) $this->request->get['path'] = $path;
 				}
 			}
 
-			$this->validate();
+			if (($this->request->get['route'] ?? null) === 'product/product' && $this->isRedirectable()) {
+				$this->handleProductGetHead($original_request);
+			} else {
+				$this->validate();
+			}
 
 			if (isset($this->request->get['route'])) {
 				return new Action($this->request->get['route']);
@@ -836,7 +846,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		return $this->product_addresses[$key] = array('keyword' => $this->selectOwnedKeyword($rows, 'product_id=' . (int)$product_id), 'main_category_id' => count($main) === 1 ? (int)key($main) : null);
 	}
 
-	private function readProductCategoryData($category_id) {
+	private function readProductCategoryData($category_id, $incoming = false) {
 		$key = $this->addressContext() . $category_id;
 		if (array_key_exists($key, $this->product_categories)) return $this->product_categories[$key];
 		$store = (int)$this->config->get('config_store_id');
@@ -849,7 +859,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			" LEFT JOIN " . DB_PREFIX . "category_to_store cs ON cs.category_id = cp.path_id AND cs.store_id = " . $store .
 			" LEFT JOIN " . DB_PREFIX . "category_description cd ON cd.category_id = cp.path_id AND cd.language_id = " . $language .
 			$this->addressAliasJoin("CONCAT('category_id=', cp.path_id)") .
-			" ORDER BY cp.level, su.seo_url_id, d.seo_url_id";
+			" ORDER BY cp.level, su.seo_url_id, d.seo_url_id" . ($incoming ? " /* incoming_path */" : "");
 		$rows = $this->db->query($sql)->rows;
 		$result = array('valid' => false, 'path' => '', 'keywords' => array());
 		$segments = array(); $levels = array();
@@ -881,8 +891,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$base = $https ? $this->config->get('config_ssl') : $this->config->get('config_url');
 		$hits = array();
 		if (!in_array(null, $keywords, true) && !in_array('', $keywords, true)) {
-			if ($path) foreach (explode('_', $path) as $n => $id) $hits[$keywords[$n]] = 'category_id=' . $id;
-			$hits[$product['keyword']] = 'product_id=' . $product_id;
+			$hits = $keywords;
 			return array('url' => $base . implode('/', array_map('rawurlencode', $keywords)) . trim((string)$this->config->get('config_seo_url_postfix')), 'params' => array(), 'hits' => $hits);
 		}
 		$params = array('route' => 'product/product');
@@ -893,7 +902,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 	private function buildProductLink($product_id, $extras, $https) {
 		$address = $this->buildProductBaseAddress($product_id, $https);
-		if ($this->hits !== null) $this->hits = $address['hits'] + $this->hits;
+		if ($this->hits !== null) $this->hits = array_merge($this->hits, $address['hits']);
 		$extras = array_diff_key($extras, array_flip(array('route', 'path', 'product_id', 'manufacturer_id', 'sort', 'order', 'page', 'limit')));
 		$params = $address['params'] + $extras;
 		$query = '';
@@ -947,6 +956,53 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		self::$path_groups[$key] = $group;
 
 		$this->cache->set($key, $group);
+	}
+
+	private function productNotFound() {
+		$this->request->get['route'] = 'error/not_found';
+	}
+
+	private function handleProductGetHead($original) {
+		if (php_sapi_name() === 'cli' || ($original['route'] ?? null) === 'error/not_found' || !$this->isRedirectable()) return;
+		if (!isset($original['product_id']) || !Seo_pro_schema::isId($original['product_id'])) { $this->productNotFound(); return; }
+		$id = (int)$original['product_id'];
+		$https = $this->isHttps();
+		$base = $https ? $this->config->get('config_ssl') : $this->config->get('config_url');
+		$base = preg_match('~^(?:[^/]*/){3}~', $base, $match) ? $match[0] : substr($base, 0, 1);
+		$url = str_replace('&amp;', '&', $base . ltrim($this->request->server['REQUEST_URI'] ?? '', '/'));
+		$extras = $this->decodeQuery($original);
+		$build = function () use ($id, $extras, $https) {
+			$this->hits = array(); $this->core_used = false;
+			try { $seo = str_replace('&amp;', '&', $this->buildProductLink($id, $extras, $https)); $hits = $this->hits; }
+			finally { $this->hits = null; }
+			return array($seo, $hits);
+		};
+		list($seo, $hits) = $build();
+		if (urldecode($url) === urldecode($seo)) return;
+		if (!$this->isMapCurrent($hits)) {
+			$this->loadCache(true);
+			list($seo, $hits) = $build();
+			if (urldecode($url) === urldecode($seo)) return;
+		}
+		if ($this->core_used && !$this->opensRoute($seo, 'product/product')) {
+			$this->core_off = true;
+			try { list($seo, $hits) = $build(); }
+			finally { $this->core_off = false; }
+			if (urldecode($url) === urldecode($seo)) return;
+		}
+		$this->load->model('catalog/product');
+		$product = $this->model_catalog_product->getProduct($id);
+		if (!$product) { $this->productNotFound(); return; }
+		if (array_key_exists('manufacturer_id', $original) && (!Seo_pro_schema::isId($original['manufacturer_id']) || (int)$original['manufacturer_id'] !== (int)$product['manufacturer_id'])) { $this->productNotFound(); return; }
+		if (array_key_exists('path', $original)) {
+			$path = $original['path'];
+			if (!is_string($path) || !preg_match('/^[1-9][0-9]*(?:_[1-9][0-9]*)*$/D', $path)) { $this->productNotFound(); return; }
+			$ids = explode('_', $path);
+			foreach ($ids as $category) if (!Seo_pro_schema::isId($category)) { $this->productNotFound(); return; }
+			$category = $this->readProductCategoryData((int)end($ids), true);
+			if (!$category['valid'] || $category['path'] !== $path) { $this->productNotFound(); return; }
+		}
+		$this->response->redirect($seo, 301);
 	}
 
 	private function validate() {

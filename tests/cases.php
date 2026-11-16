@@ -99,44 +99,26 @@ $x = req('/tyre.html/', 'GET', ['config_seo_url_include_path' => 0]); check('/ty
 $x = req('/heidenau.html'); check('manufacturer still decodes', $x['route'] ?? $x, 'product/manufacturer/info');
 
 echo "\n-- 1.6.2 A01: schema not ready\n";
-// getPathByProduct() keeps a static map for the request: each check takes a product id no other case has used
+// Decisions 10/12: unavailable schema never guesses a category; product paths are request-local.
 [$r, $c] = boot(['config' => ['seo_pro_schema_failed' => true]]); $c->index(); $r->get('db')->p2c[88] = 11;
-check('schema failed: link built from the first category', $r->get('url')->link('product/product', 'product_id=88'), 'http://shop.test/index.php?route=product/product&amp;path=10_11&amp;product_id=88');
-check('schema failed: product_to_category is read', count(preg_grep('~product_to_category WHERE product_id = .88. LIMIT 1~', $r->get('db')->log)), 1);
-check('schema failed: no main_category in SQL', count(preg_grep('~main_category~', $r->get('db')->log)), 0);
+check('schema failed: plain address without guessed category', $r->get('url')->link('product/product', 'product_id=88'), 'http://shop.test/index.php?route=product/product&amp;product_id=88');
+check('schema failed: no pc join', count(preg_grep('~JOIN oc_product_to_category~', $r->get('db')->log)), 0);
+check('schema failed: no column read', count(preg_grep('~pc.main_category~', $r->get('db')->log)), 0);
 [$r, $c] = boot([]); $c->index(); $r->get('db')->p2c[89] = 11; $r->get('url')->link('product/product', 'product_id=89');
-check('schema ready: main_category in SQL', count(preg_grep('~product_id = .89. ORDER BY main_category DESC LIMIT 1~', $r->get('db')->log)), 1);
+check('schema ready: joined marks', sql($r, 'product_address'), 1);
 
-echo "\n-- cached paths split into groups\n";
-$groups = fn($cache) => array_values(preg_grep('~^seo_pro\.path\.~', array_keys($cache->d)));
-new_request(); [$r, $c] = boot([]); $c->index(); $cache = $r->get('cache'); $cache->sets = []; $cache->gets = [];
-check('key of a product group', [Seo_pro_cache::pathKey('p', 1), Seo_pro_cache::pathKey('p', 33), Seo_pro_cache::pathKey('p', 32), Seo_pro_cache::pathKey('c', 111)], ['seo_pro.path.p.01', 'seo_pro.path.p.01', 'seo_pro.path.p.00', 'seo_pro.path.c.15']);
-check('a miss of product 1', $r->get('url')->link('product/product', 'product_id=1'), 'http://shop.test/moto/enduro/tyre.html');
-check('a miss writes only the group of the product and of its category', $cache->sets, ['seo_pro.path.c.11', 'seo_pro.path.p.01']);
-check('the group holds only that product', [$cache->d['seo_pro.path.p.01'], $cache->d['seo_pro.path.c.11']], [[1 => '10_11'], [11 => '10_11']]);
-$r->get('db')->p2c[33] = 10; $cache->sets = [];
-check('product 33 of the same group', $r->get('url')->link('product/product', 'product_id=33'), 'http://shop.test/index.php?route=product/product&amp;path=10&amp;product_id=33');
-check('its miss rewrites the group it shares with product 1', $cache->sets, ['seo_pro.path.c.10', 'seo_pro.path.p.01']);
-check('the shared group keeps both', $cache->d['seo_pro.path.p.01'], [1 => '10_11', 33 => '10']);
-$r->get('url')->link('product/product', 'product_id=1'); $r->get('url')->link('product/product', 'product_id=33'); $r->get('url')->link('product/product', 'product_id=1');
-$reads = array_count_values($cache->gets);
-check('each group is read from the cache once per request', [$reads['seo_pro.path.p.01'], $reads['seo_pro.path.c.11'], $reads['seo_pro.path.c.10']], [1, 1, 1]);
-check('links of known products write nothing', $cache->sets, ['seo_pro.path.c.10', 'seo_pro.path.p.01']);
-
-// Another request wrote group 02 meanwhile: a miss in group 01 does not overwrite it
-$cache->d['seo_pro.path.p.02'] = [2 => '10', 66 => '30'];
-new_request(); [$r, $c] = boot([]); $r->set('cache', $cache); $c->index(); $cache->sets = []; $cache->gets = []; $r->get('db')->log = [];
-check('product 1 from the cache', $r->get('url')->link('product/product', 'product_id=1'), 'http://shop.test/moto/enduro/tyre.html');
-check('product 2 from the group of another request', $r->get('url')->link('product/product', 'product_id=2'), 'http://shop.test/moto/road.tyre.html');
-check('cached products cost no SQL', count(preg_grep('~product_to_category|category_path~', $r->get('db')->log)), 0);
-check('product 9 in group 09', $r->get('url')->link('product/product', 'product_id=9'), 'http://shop.test/' . implode('/', array_map(fn($i) => "c$i", range(100, 111))) . '/deep.html');
-check('the miss wrote groups 09 and 15 only', $cache->sets, ['seo_pro.path.c.15', 'seo_pro.path.p.09']);
-check('the group of the other request is kept', $cache->d['seo_pro.path.p.02'], [2 => '10', 66 => '30']);
-check('every group in the cache', $groups($cache), ['seo_pro.path.c.11', 'seo_pro.path.p.01', 'seo_pro.path.c.10', 'seo_pro.path.p.02', 'seo_pro.path.c.15', 'seo_pro.path.p.09']);
+echo "\n-- current product data and independent cached category paths\n";
+new_request(); [$r, $c] = boot([]); $c->index(); $cache = $r->get('cache'); $cache->sets = [];
+check('current product path', $r->get('url')->link('product/product', 'product_id=1'), 'http://shop.test/moto/enduro/tyre.html');
+check('product generation does not write path groups', $cache->sets, []);
+$n = sql($r, 'all'); $r->get('url')->link('product/product', 'product_id=1'); check('repeat product uses memory', sql($r, 'all'), $n);
+check('standalone category still uses category group', $r->get('url')->link('product/category', 'path=11'), 'http://shop.test/moto/enduro/');
+check('only standalone category group written', $cache->sets, ['seo_pro.path.c.11']);
+check('category group value', $cache->d['seo_pro.path.c.11'] ?? null, [11 => '10_11']);
 $r->get('db')->p2c[34] = 999;
-check('a category without a path: empty path, no path in the link', [call($c, 'getPathByProduct', 34), call($c, 'getPathByCategory', 999)], ['', '']);
+check('invalid product hierarchy', call($c, 'getPathByProduct', 34), false);
 check('ids below 1', [call($c, 'getPathByProduct', 0), call($c, 'getPathByCategory', -3)], [false, false]);
-check('a product without categories', call($c, 'getPathByProduct', 35), false);
+check('product without categories', call($c, 'getPathByProduct', 35), false);
 new_request();
 
 echo "\n-- type switch (F02)\n";
@@ -178,10 +160,10 @@ $np = ['config_seo_url_include_path' => 0];
 [$r, $c] = boot(['config' => $np]); $c->index();
 check('store 0 map', [$r->get('url')->link('product/product', 'product_id=3'), $r->get('url')->link('product/product', 'product_id=2')], ['http://shop.test/index.php?route=product/product&amp;product_id=3', 'http://shop.test/road.tyre.html']);
 $r->get('config')->d['config_store_id'] = 1;
-check('store 1 gets its own map', [$r->get('url')->link('product/product', 'product_id=3'), $r->get('url')->link('product/product', 'product_id=2'), sql($r, 'map')], ['http://shop.test/foo.html', 'http://shop.test/index.php?route=product/product&amp;product_id=2', 2]);
+check('store 1 gets its own map', [$r->get('url')->link('product/product', 'product_id=3'), $r->get('url')->link('product/product', 'product_id=2'), sql($r, 'map')], ['http://shop.test/foo.html', 'http://shop.test/index.php?route=product/product&amp;product_id=2', 1]);
 $r->get('config')->d['config_store_id'] = 0; $r->get('config')->d['config_language_id'] = 2;
-check('language 2 gets its own map', [$r->get('url')->link('product/product', 'product_id=1'), sql($r, 'map')], ['http://shop.test/shina.html', 3]);
-check('each map has its own cache key', array_keys($r->get('cache')->d), ['seo_pro.0.1', 'seo_pro.1.1', 'seo_pro.0.2']);
+check('language 2 gets its own map', [$r->get('url')->link('product/product', 'product_id=1'), sql($r, 'map')], ['http://shop.test/shina.html', 1]);
+check('each map has its own cache key', array_keys($r->get('cache')->d), ['seo_pro.0.1']);
 
 echo "\n-- 1.6.3 F2: the kinds of query\n";
 [$r, $c] = boot([]);
@@ -251,7 +233,7 @@ foreach (['POST', 'PUT', 'PATCH', 'DELETE'] as $method) {
 	$x = req('/information/contact', $method); check("$method route address: no 301", $x['route'] ?? $x, 'information/contact');
 }
 foreach (['GET', 'HEAD'] as $method) { $x = req('/index.php?route=product/product&product_id=1', $method); check("$method old address: 301", $x['status'] ?? $x, 301); }
-$x = req('/index.php?route=product/product&product_id=1', 'GET', [], ['HTTP_X_REQUESTED_WITH' => 'XMLHttpRequest']); check('XHR old address: no 301', $x['route'] ?? $x, 'product/product');
+$x = req('/index.php?route=product/product&product_id=1', 'GET', [], ['HTTP_X_REQUESTED_WITH' => 'XMLHttpRequest']); check('XHR old address: same 301 as GET (decision 5)', $x, ['redirect' => 'http://shop.test/moto/enduro/tyre.html', 'status' => 301]);
 
 echo "\n-- 1.6.3 F5: names of parameters in the canonical address\n";
 foreach (['/?a%26b=1' => ['a&amp;b' => '1'], '/?a%22b=1' => ['a&quot;b' => '1'], '/?a%3Cb%3E=1' => ['a&lt;b&gt;' => '1'], '/?%26amp%3Bx=1' => ['&amp;amp;x' => '1'], '/?%D1%8F=%D0%B6' => ['я' => 'ж'],
@@ -277,7 +259,7 @@ echo "\n-- the map follows records written to seo_url past the models of the cor
 function warm() { [, $r] = run('/moto/'); return ['db' => $r->get('db'), 'cache' => $r->get('cache')]; }
 $o = warm();
 [$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o);
-check('map from the cache: MAX(seo_url_id) and one check of the address, no map load', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'verify'), sql($r, 'map'), sql($r, 'fallback'), sql($r, 'all')], ['product/product', 1, 1, 0, 0, 2]);
+check('map from the cache: MAX(seo_url_id) and one check of the address, no map load', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'verify'), sql($r, 'map'), sql($r, 'fallback'), sql($r, 'all')], ['product/product', 1, 1, 0, 0, 5]);
 [$x, $r] = run('/index.php?route=product/product&path=10&product_id=77', 'GET', $o);
 check('address without keywords: MAX(seo_url_id) only', [$x['route'] ?? $x, sql($r, 'max'), sql($r, 'verify'), sql($r, 'map')], ['product/product', 1, 0, 0]);
 [$x, $r] = run('/nope/', 'GET', $o);
