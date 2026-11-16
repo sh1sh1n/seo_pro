@@ -159,6 +159,11 @@ if ($patched) {
 		check("301: $uri", freq($uri)[0], ['redirect' => $S . $location, 'status' => 301]);
 		[$n, $x] = follow($uri, ['seo' => $F]); check('one 301, then the address is stable', [$n, $x['route'] ?? $x], [1, 'extension/notes/note']);
 	}
+	// The core reads a foreign record and a product in one address and opens the product: the module builds its address
+	foreach (['/black-friday/tyre' => 'moto/enduro/tyre.html?offer_id=3', '/black-friday/moto' => 'moto/?offer_id=3', '/black-friday/tyre?x=1&path=10' => 'moto/enduro/tyre.html?offer_id=3&x=1'] as $uri => $location) {
+		check("301: $uri", freq($uri)[0], ['redirect' => $S . $location, 'status' => 301]);
+		[$n, $x] = follow($uri, ['seo' => $F]); check('one 301, then the address is stable', [$n, isset($x['route']) && strpos($x['route'], 'product/') === 0], [1, true]);
+	}
 	[$x, $r] = freq('/index.php?route=checkout/cart&topic_path=1_2'); $n = sql($r, 'core');
 	check('the check costs the queries of the core for the parts of the address it has built', [$x['route'] ?? $x, $n], ['checkout/cart', 4]);
 	[$x, $r] = freq('/index.php?route=checkout/cart&order_id=7'); check('a link the core does not change costs no query', [$x['route'] ?? $x, sql($r, 'core')], ['checkout/cart', 0]);

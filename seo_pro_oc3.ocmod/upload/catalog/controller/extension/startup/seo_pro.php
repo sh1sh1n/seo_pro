@@ -106,7 +106,8 @@ class ControllerExtensionStartupSeoPro extends Controller {
 			if ($page !== null && isset($page['core'])) {
 				$page = $this->resolveByCore($route);
 
-				if ($page !== null) {
+				// A page of the module the core has read in a mixed address ("/blog-category/product") is built by the module, as any other
+				if ($page !== null && !isset($this->page_routes[$page['route']])) {
 					$this->core_params = array_keys($page['params']);
 				}
 			}
