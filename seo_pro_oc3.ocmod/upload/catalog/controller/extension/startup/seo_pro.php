@@ -217,8 +217,6 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	public function rewrite($link) {
 		if (!$this->config->get('config_seo_url')) return $link;
 
-		$this->loadCache();
-
 		$component = parse_url(str_replace('&amp;', '&', $link));
 
 		if ($component === false) return $link;
@@ -233,6 +231,13 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$route = $data['route'];
 		unset($data['route']);
 
+		if ($route === 'product/product') {
+			if (!isset($data['product_id']) || !Seo_pro_schema::isId($data['product_id'])) return $link;
+			return $this->buildProductLink((int)$data['product_id'], $data, $scheme === 'https');
+		}
+
+		$this->loadCache();
+
 		$base = ($scheme === 'https') ? $this->config->get('config_ssl') : $this->config->get('config_url');
 
 		if ($route === 'common/home') {
@@ -246,22 +251,6 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		}
 
 		switch ($route) {
-			case 'product/product':
-				if (isset($data['product_id']) && is_scalar($data['product_id'])) {
-					$explode = explode('/', (string)$data['product_id']);
-
-					// The module owns only path and product_id, every other parameter is kept as is
-					$own = array();
-					if ($this->config->get('config_seo_url_include_path')) {
-						$own['path'] = $this->getPathByProduct($explode[0]);
-						if (!$own['path']) return $link;
-					}
-					$own['product_id'] = $explode[0];
-
-					$data = $own + array_diff_key($data, array('path' => '', 'product_id' => ''));
-				}
-				break;
-
 			case 'product/category':
 				if (isset($data['path']) && is_scalar($data['path'])) {
 					$category = explode('_', (string)$data['path']);
@@ -882,23 +871,43 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		return $this->product_categories[$key] = $result;
 	}
 
-	private function getPathByProduct($product_id) {
-		$product_id = (int)$product_id;
-		if ($product_id < 1) return false;
-
-		$path = $this->getPathGroup('p', $product_id);
-
-		if (!isset($path[$product_id])) {
-			// Without the column main_category the first category of the product is used
-			$order = $this->config->get('seo_pro_schema_failed') ? '' : " ORDER BY main_category DESC";
-
-			$query = $this->db->query("SELECT category_id FROM " . DB_PREFIX . "product_to_category WHERE product_id = '" . (int)$product_id . "'" . $order . " LIMIT 1");
-			$path[$product_id] = $this->getPathByCategory($query->num_rows ? (int)$query->row['category_id'] : 0);
-
-			$this->setPathGroup('p', $product_id, $path);
+	private function buildProductBaseAddress($product_id, $https) {
+		$product = $this->readProductAddressData($product_id);
+		$category = null;
+		if ($this->config->get('config_seo_url_include_path') && $product['main_category_id']) $category = $this->readProductCategoryData($product['main_category_id']);
+		$path = $category && $category['valid'] ? $category['path'] : '';
+		$keywords = $path ? $category['keywords'] : array();
+		$keywords[] = $product['keyword'];
+		$base = $https ? $this->config->get('config_ssl') : $this->config->get('config_url');
+		$hits = array();
+		if (!in_array(null, $keywords, true) && !in_array('', $keywords, true)) {
+			if ($path) foreach (explode('_', $path) as $n => $id) $hits[$keywords[$n]] = 'category_id=' . $id;
+			$hits[$product['keyword']] = 'product_id=' . $product_id;
+			return array('url' => $base . implode('/', array_map('rawurlencode', $keywords)) . trim((string)$this->config->get('config_seo_url_postfix')), 'params' => array(), 'hits' => $hits);
 		}
+		$params = array('route' => 'product/product');
+		if ($path) $params['path'] = $path;
+		$params['product_id'] = $product_id;
+		return array('url' => $base . 'index.php', 'params' => $params, 'hits' => array());
+	}
 
-		return $path[$product_id];
+	private function buildProductLink($product_id, $extras, $https) {
+		$address = $this->buildProductBaseAddress($product_id, $https);
+		if ($this->hits !== null) $this->hits = $address['hits'] + $this->hits;
+		$extras = array_diff_key($extras, array_flip(array('route', 'path', 'product_id', 'manufacturer_id', 'sort', 'order', 'page', 'limit')));
+		$params = $address['params'] + $extras;
+		$query = '';
+		if (isset($params['route'])) { $query = 'route=' . $params['route']; unset($params['route']); }
+		if ($params) $query .= ($query !== '' ? '&amp;' : '') . http_build_query($params, '', '&amp;');
+		return $address['url'] . ($query !== '' ? '?' . $query : '');
+	}
+
+	private function getPathByProduct($product_id) {
+		if (!Seo_pro_schema::isId($product_id)) return false;
+		$product = $this->readProductAddressData((int)$product_id);
+		if (!$product['main_category_id']) return false;
+		$category = $this->readProductCategoryData($product['main_category_id']);
+		return $category['valid'] ? $category['path'] : false;
 	}
 
 	private function getPathByCategory($category_id) {
