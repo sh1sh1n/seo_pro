@@ -25,6 +25,13 @@ function standTarget($url) {
     }
     return $url;
 }
+function standExpectedChain($chain, $uri, $build, $method) {
+    if ($build !== 'candidate') return $chain;
+    $chain = preg_replace_callback('~(?<=-> )\S+~', function ($match) { return standTarget($match[0]); }, $chain);
+    if ($method !== 'POST' && $chain === '200' && urldecode(standTarget($uri)) !== urldecode($uri)) $chain = '301 -> ' . standTarget($uri) . ' 200';
+    if (preg_match('~^301 -> (\S+) 200$~', $chain, $target) && urldecode($target[1]) === urldecode($uri)) $chain = '200';
+    return $chain;
+}
 function standManifestLines($dir,$path) {
     if (defined('SEO_PRO_STAND_MANIFEST')) { $files=json_decode(base64_decode(SEO_PRO_STAND_MANIFEST),true); if(isset($files[$path])) return explode("\n",$files[$path]); }
     if (!is_file($dir.'/'.$path)) throw new RuntimeException('missing stand manifest '.$path);
@@ -55,7 +62,8 @@ function standHttpRegression($build, $dir, $scenario = false) {
             $temporary = ($set === 'canon3' && !$afterCleanup) || (!$afterCleanup && preg_match('~load-blog-(?:sub|nested)|/search(?:/|\?|$)|route=product/search~', $line) === 1);
             if ($temporary !== $scenario) { if ($temporary && !$scenario) $skipped++; continue; }
             [$all,$label,$uri,$expectedChain,$expectedCanonical,$expectedH1] = $m;
-            if ($build === 'candidate') { $expectedChain = standTarget($expectedChain); $expectedCanonical = standTarget($expectedCanonical); }
+            $expectedChain = standExpectedChain($expectedChain, $uri, $build, $label);
+            if ($build === 'candidate') $expectedCanonical = standTarget($expectedCanonical);
             $url = $base . $uri; $chain = []; $r = null;
             for ($n = 0; $n < 6; $n++) {
                 $r = standHttpRequest($url, $n === 0 && $label === 'POST' ? 'POST' : 'GET', $n === 0 && $label === 'AJAX');
@@ -63,8 +71,6 @@ function standHttpRegression($build, $dir, $scenario = false) {
                 if (strpos($r['location'], $base . '/') !== 0) throw new RuntimeException('unexpected redirect host');
                 $chain[] = '-> ' . substr($r['location'], strlen($base)); $url = $r['location'];
             }
-            // On an already short candidate address the old 301 entry intentionally collapses to 200.
-            if ($build === 'candidate' && preg_match('~^301 -> (\S+) 200$~', $expectedChain, $target) && $target[1] === $uri) $expectedChain = '200';
             [$canonical,$h1] = standDocument($r['body'], $base); $actual = implode(' ', $chain);
             $assert($actual === $expectedChain, "$set $label $uri chain=$actual expected=$expectedChain");
             $assert($canonical === $expectedCanonical, "$set $uri canonical=$canonical expected=$expectedCanonical");
@@ -100,6 +106,69 @@ function standVerifyProducts($db,$build) {
     sort($times);echo "load sample build=$build products=300 checks=$checks failed=$failed TTFB_median_ms=".$times[intdiv(count($times),2)].' p95_ms='.$times[(int)(count($times)*.95)]."\n";
     if($failed)throw new RuntimeException('load-product baseline differs');
 }
+
+function standFocusedProducts($db) {
+    $base='https://test.mozap.ru';$checks=0;
+    $assert=function($ok,$label)use(&$checks){$checks++;if(!$ok)throw new RuntimeException('focused HTTP: '.$label);};
+    foreach([28=>'/htc-touch-hd.html',42=>'/component/monitor/test.html']as$id=>$path) {
+        $row=$db->query('SELECT manufacturer_id FROM '.DB_PREFIX.'product WHERE product_id='.(int)$id)->row;
+        $manufacturer=(int)$row['manufacturer_id'];$extras='utm_source=a%26b%3Dc&custom%5Bx%5D=a%2Bb';
+        foreach([false,true]as$xhr)foreach(['GET','HEAD']as$method) {
+            $r=standHttpRequest($base.$path.'?'.$extras,$method,$xhr);
+            $assert($r['status']===200&&$r['location']==='',"current $id $method XHR=$xhr");
+            if($method==='HEAD')$assert($r['body']==='','HEAD current has no body');
+            else {[$canonical,$h1]=standDocument($r['body'],$base);$assert($canonical===$path,'canonical excludes analytics');$assert($h1!==''&&$h1!=='-','real H1 exists');}
+            $old='/index.php?route=product/product&product_id='.$id.'&manufacturer_id='.$manufacturer.'&sort=p.price&order=ASC&page=2&limit=1&'.$extras;
+            $r=standHttpRequest($base.$old,$method,$xhr);
+            $assert($r['status']===301&&$r['location']===$base.$path.'?'.$extras,"one final redirect $id $method XHR=$xhr");
+            if($method==='HEAD')$assert($r['body']==='','HEAD redirect has no body');
+            foreach(['manufacturer_id=0','manufacturer_id=x','manufacturer_id='.($manufacturer+10000),'manufacturer_id%5B%5D='.$manufacturer]as$query) {
+                $r=standHttpRequest($base.$path.'?'.$query,$method,$xhr);
+                $assert($r['status']===404&&$r['location']==='',"invalid manufacturer $id $query $method XHR=$xhr");
+                if($method==='HEAD')$assert($r['body']==='','HEAD error has no body');
+            }
+        }
+        foreach(['POST','PUT','PATCH','DELETE']as$method) {
+            $r=standHttpRequest($base.'/index.php?route=product/product&product_id='.$id.'&manufacturer_id='.$manufacturer,$method);
+            $assert($r['status']!==301&&$r['location']==='',"$method has no new product redirect");
+            echo "method product=$id $method status={$r['status']}\n";
+        }
+        $r=standHttpRequest($base.$path);$json=0;
+        preg_match_all('~<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>~is',$r['body'],$blocks);
+        foreach($blocks[1]as$block){json_decode(trim($block),true,512,JSON_THROW_ON_ERROR);$json++;}
+        echo "presentation product=$id canonical=$path JSON-LD_blocks=$json\n";
+        if(!$json)echo "not run JSON-LD product=$id: theme returned no application/ld+json blocks\n";
+        if(class_exists('DOMDocument')) {
+            $dom=new DOMDocument();$dom->loadHTML('<?xml encoding="utf-8"?>'.$r['body'],LIBXML_NONET|LIBXML_NOERROR|LIBXML_NOWARNING);$xp=new DOMXPath($dom);$links=[];
+            foreach($xp->query('//*[contains(concat(" ",normalize-space(@class)," ")," breadcrumb ")]//a[@href]')as$a)$links[]=$a->getAttribute('href');
+            $assert(count($links)>0,'theme breadcrumb anchors exist');
+            foreach(array_unique($links)as$href)if(strpos($href,$base.'/')===0){$crumb=standHttpRequest($href);$assert($crumb['status']===200&&$crumb['location']==='','breadcrumb link opens directly');}
+            echo 'breadcrumbs product='.$id.' '.json_encode(array_values(array_unique($links)),JSON_UNESCAPED_SLASHES)."\n";
+        }else echo "not run breadcrumb DOM inspection: DOM extension unavailable\n";
+    }
+    $r=standHttpRequest($base.'/unknown-product-segment/htc-touch-hd.html');$assert($r['status']===404&&$r['location']==='','unknown segment rejected');
+    $r=standHttpRequest($base.'/index.php?route=product/product&product_id%5B%5D=28');$assert($r['status']===404&&$r['location']==='','array product id rejected');
+    foreach(['/desktops/?page=2','/apple.html?page=2']as$uri){$r=standHttpRequest($base.$uri);$assert($r['status']===200&&$r['location']==='','list pagination retained');}
+    $r=standHttpRequest($base.'/desktops.html','GET',true);$assert($r['status']===200&&$r['location']==='','non-product XHR preserves previous no-redirect rule');
+    $memo=[];
+    foreach(['home'=>'/','category'=>'/desktops/?sort=p.price&order=ASC&page=2','manufacturer'=>'/apple.html?sort=p.price&order=ASC&page=2','search'=>'/index.php?route=product/search&search=apple&sort=p.price&order=ASC','card/related'=>'/component/monitor/test.html']as$origin=>$uri) {
+        $r=standHttpRequest($base.$uri);$assert($r['status']===200&&$r['location']==='','list/card opens '.$origin);
+        preg_match_all('~<a\b[^>]*href=["\']([^"\']+)["\']~i',$r['body'],$matches);$products=[];
+        foreach(array_unique($matches[1])as$encoded) {
+            $href=html_entity_decode($encoded,ENT_QUOTES,'UTF-8');if(strpos($href,$base.'/')!==0)continue;$parts=parse_url($href);$query=[];parse_str($parts['query']??'',$query);$product=($query['route']??null)==='product/product';
+            if(!$product&&substr($parts['path']??'',-5)==='.html') {
+                $slug=rawurldecode(basename(substr($parts['path'],0,-5)));
+                if(!array_key_exists($slug,$memo))$memo[$slug]=$db->query("SELECT `query` FROM ".DB_PREFIX."seo_url WHERE store_id=0 AND language_id=1 AND keyword='".$db->escape($slug)."' ORDER BY seo_url_id LIMIT 1")->row['query']??'';
+                $product=preg_match('/^product_id=[1-9][0-9]*$/D',$memo[$slug])===1;
+            }
+            if(!$product)continue;$products[$href]=true;
+            foreach(['manufacturer_id','sort','order','page','limit']as$key)$assert(!array_key_exists($key,$query),$origin.' product href excludes '.$key);
+        }
+        $assert(count($products)>0,'real product anchors observed '.$origin);
+        echo "product hrefs origin=$origin unique=".count($products)." clean=yes\n";
+    }
+    echo "PASS focused stand checks=$checks\n";
+}
 // END STAND HTTP
 if (in_array('--stand-baseline', $argv ?? [], true) || in_array('--stand-candidate', $argv ?? [], true)) {
     // Read-only HTTP here. The MySQL harness verifies installed hashes/cache and orchestrates mutations.
@@ -128,6 +197,11 @@ try {
     fclose($pipes[0]); $base = 'http://127.0.0.1:' . $port; $ready = false;
     for ($i = 0; $i < 50; $i++) { if (!proc_get_status($process)['running']) break; $body = @file_get_contents($base . '/__ping__'); if ($body === 'navigation ' . $run) { $ready = true; break; } usleep(100000); }
     if (!$ready) throw new RuntimeException('own HTTP server did not start');
+    httpCheck('stand chain preserves status separators', standExpectedChain('301 -> /desktops/htc-touch-hd.html?blog_path=1 200', '/blog-category-1/htc-touch-hd', 'candidate', 'GET'), '301 -> /htc-touch-hd.html?blog_path=1 200');
+    httpCheck('stand old long address gains planned redirect', standExpectedChain('200', '/desktops/htc-touch-hd.html?blogarticle_id=1', 'candidate', 'GET'), '301 -> /htc-touch-hd.html?blogarticle_id=1 200');
+    httpCheck('stand already short address collapses old redirect', standExpectedChain('301 -> /desktops/htc-touch-hd.html 200', '/htc-touch-hd.html', 'candidate', 'GET'), '200');
+    httpCheck('stand encoded spaces stay equivalent', standExpectedChain('200', '/htc-touch-hd.html?x=a%20b', 'candidate', 'GET'), '200');
+    httpCheck('stand baseline chain unchanged', standExpectedChain('301 -> /desktops/htc-touch-hd.html?blog_path=1 200', '/blog-category-1/htc-touch-hd', 'baseline', 'GET'), '301 -> /desktops/htc-touch-hd.html?blog_path=1 200');
     $canonical = 'http://shop.test/moto/enduro/tyre.html';
     foreach ([false,true] as $xhr) foreach (['GET','HEAD'] as $method) {
         foreach ([['/moto/enduro/tyre.html',200,0,1], ['/index.php?route=product/product&product_id=1',301,1,0], ['/tyre.html?manufacturer_id=5&page=2&utm_source=a%26b',301,1,0], ['/tyre.html?manufacturer_id=6',404,1,0], ['/tyre.html?manufacturer_id=0',404,1,0], ['/tyre.html?manufacturer_id=x',404,1,0], ['/tyre.html?manufacturer_id%5B%5D=5',404,1,0], ['/unknown/tyre.html',404,0,0], ['/enduro/moto/tyre.html',404,1,0]] as [$uri,$status,$calls,$card]) {

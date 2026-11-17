@@ -289,6 +289,8 @@ function runStandScenarios($db,$credentials,$build) {
     verifyStandBuild($build,$db);
     if (!function_exists('standHttpRequest')) throw new RuntimeException('use --bundle for stand HTTP functions');
     if (getenv('SEO_PRO_STAND_SCENARIO') === 'verify') { standVerifyProducts($db,$build); return; }
+    if (getenv('SEO_PRO_STAND_SCENARIO') === 'focused') { standFocusedProducts($db); return; }
+    if ((getenv('SEO_PRO_STAND_SCENARIO') ?: '') !== '') throw new InvalidArgumentException('unknown stand scenario selector');
     $base='https://test.mozap.ru'; $checks=0;
     $assert=function($ok,$name)use(&$checks){$checks++;if(!$ok)throw new RuntimeException('scenario assertion '.$name);};
     $request=function($uri,$status,$location=null)use($base,$assert){$r=standHttpRequest($base.$uri);$okLocation=$location===null?($status===301?$r['location']!=='':$r['location']===''):$r['location']===$location;$assert($r['status']===$status&&$okLocation,$uri);return $r;};
@@ -297,6 +299,24 @@ function runStandScenarios($db,$credentials,$build) {
     $alias=$aliases[0]; $aliasId=(int)$alias['seo_url_id'];
     $original=$request('/index.php?route=product/product&product_id='.$id,301)['location'];
     $token='load-nav-'.bin2hex(random_bytes(6));
+    $originalMain=$db->query('SELECT category_id FROM '.DB_PREFIX.'product_to_category WHERE product_id='.$id.' AND main_category=1')->row;
+    if (!$originalMain) throw new RuntimeException('visible product list fixture requires a marked category');
+    $assertList=function($target)use($base,$assert,$originalMain){
+        $url=$base.'/index.php?route=product/category&path='.(int)$originalMain['category_id'].'&sort=pd.name&order=ASC';$result=null;
+        for($hop=0;$hop<4;$hop++){$result=standHttpRequest($url);if($result['location']==='')break;if(strpos($result['location'],$base.'/')!==0)throw new RuntimeException('unexpected list redirect host');$url=$result['location'];}
+        $assert($result['status']===200&&$result['location']==='','actual list reaches a page');
+        preg_match_all('~<a\b[^>]*href=["\']([^"\']+)["\']~i',$result['body'],$matches);
+        $hrefs=array_map(function($href){return html_entity_decode($href,ENT_QUOTES,'UTF-8');},$matches[1]);
+        $assert(in_array($target,$hrefs,true),'actual list renders current product href after SQL mutation');
+        echo "PASS actual list current product href after mutation\n";
+    };
+
+    $assertProductPage=function($target)use($request,$assert,$base){
+        $r=$request(standUri($target),200);[$canonical,$h1]=standDocument($r['body'],$base);
+        $assert($canonical===standUri($target),'actual product canonical follows changed address');
+        $assert($h1!==''&&$h1!=='-','actual changed product page retains H1');
+        echo "PASS actual product canonical and H1 after mutation\n";
+    };
     $state=new StandScenario($db,$credentials,'keyword',['seo_url'=>'seo_url_id='.$aliasId]);
     try {
         // Warm the actual map, then UPDATE without changing its id; no cache clear between requests.
@@ -304,7 +324,8 @@ function runStandScenarios($db,$credentials,$build) {
         $db->query("UPDATE ".DB_PREFIX."seo_url SET keyword='".$db->escape($token)."' WHERE seo_url_id=$aliasId");
         $target=str_replace($alias['keyword'],$token,$original);
         $request('/index.php?route=product/product&product_id='.$id,301,$target);
-        $request(standUri($original),404); $request(standUri($target),200);
+        $assertList($target);
+        $request(standUri($original),404); $assertProductPage($target);
         $db->query('DELETE FROM '.DB_PREFIX.'seo_url WHERE seo_url_id='.$aliasId);
         $request(standUri($target),404);
     } finally {$state->restore();}
@@ -322,7 +343,8 @@ function runStandScenarios($db,$credentials,$build) {
             $state->insert('product_to_category',['product_id'=>$id,'category_id'=>$category,'main_category'=>1]);
             $c=addressController($db); $target=str_replace('&amp;','&',addressHref($c,$id));
             $assert($target!==$original,'new main changes outgoing Url');
-            $request(standUri($original),301,$target); $request(standUri($target),200);
+            $assertList($target);
+            $request(standUri($original),301,$target); $assertProductPage($target);
         } finally {$state->restore();}
     }
     // The old unsafe foreign.php phases are one self-restoring scenario now.
@@ -372,17 +394,29 @@ function runStandScenarios($db,$credentials,$build) {
             $db->query("UPDATE ".DB_PREFIX."seo_url SET keyword='".$db->escape($token)."' WHERE seo_url_id=$catAliasId");
             $target=str_replace('&amp;','&',addressHref(addressController($db),$id));
             $assert($target!==$original,'category keyword changes outgoing Url');
-            $request('/index.php?route=product/product&product_id='.$id,301,$target);$request(standUri($target),200);
+            $assertList($target);
+            $request('/index.php?route=product/product&product_id='.$id,301,$target);$assertProductPage($target);
         }finally{$state->restore();}
         $categoryRow=$db->query('SELECT * FROM '.DB_PREFIX.'category WHERE category_id='.$cat)->row;
+        if ($db->query('SELECT category_id FROM '.DB_PREFIX.'category_path WHERE path_id='.$cat.' AND category_id<>'.$cat.' LIMIT 1')->num_rows) throw new RuntimeException('hierarchy fixture requires a leaf main category');
+        $parents=$db->query('SELECT c.category_id FROM '.DB_PREFIX.'category c WHERE c.status=1 AND c.category_id<>'.$cat.' AND NOT EXISTS (SELECT 1 FROM '.DB_PREFIX.'category_path cp WHERE cp.category_id=c.category_id AND cp.path_id='.$cat.') ORDER BY c.category_id LIMIT 30')->rows;
+        $parentPath=null; $parentId=null; $lookup=addressController($db);
+        foreach ($parents as $row) {
+            $data=addressCall($lookup,'readProductCategoryData',(int)$row['category_id']);
+            if ($data['valid'] && !in_array(null,$data['keywords'],true) && !in_array('',$data['keywords'],true)) { $parentPath=explode('_',$data['path']); $parentId=(int)$row['category_id']; break; }
+        }
+        if ($parentPath===null) throw new RuntimeException('no available parent for real hierarchy move');
+
         $state=new StandScenario($db,$credentials,'hierarchy',['category'=>'category_id='.$cat,'category_path'=>'category_id='.$cat]);
         try {
             standHttpRequest($original);
-            $db->query('UPDATE '.DB_PREFIX.'category SET parent_id=0 WHERE category_id='.$cat);
+            $db->query('UPDATE '.DB_PREFIX.'category SET parent_id='.$parentId.' WHERE category_id='.$cat);
             $db->query('DELETE FROM '.DB_PREFIX.'category_path WHERE category_id='.$cat);
-            $state->insert('category_path',['category_id'=>$cat,'path_id'=>$cat,'level'=>0]);
+            foreach (array_merge($parentPath,[$cat]) as $level=>$pathId) $state->insert('category_path',['category_id'=>$cat,'path_id'=>(int)$pathId,'level'=>$level]);
             $target=str_replace('&amp;','&',addressHref(addressController($db),$id));
-            $request('/index.php?route=product/product&product_id='.$id,301,$target);$request(standUri($target),200);
+            $assert($target!==$original,'real hierarchy move changes outgoing Url');
+            $assertList($target);
+            $request('/index.php?route=product/product&product_id='.$id,301,$target);$assertProductPage($target);
         }finally{$state->restore();}
     }else echo "not run candidate main/hierarchy/category-keyword expectations on baseline 1.8\n";
     // Reproduce the historical canon3 setup with cloned complete rows, inside the same backup/finally guard.
