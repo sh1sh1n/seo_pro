@@ -45,3 +45,42 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 - A real extension with its own SEO URLs (a blog, a theme): the router of the core is run with the synthetic modification `foreign.ocmod.xml` only. An extension that redirects or returns an action from `index()` of the router, that reads the parameters of the visitor there, or that builds an address it does not read back is not covered. The stub of the database compares keywords byte by byte, MySQL does not.
 - Speed and memory.
 - PHP versions other than the ones the script was run on.
+
+## Product navigation
+
+`tests/run.sh` включает Url-проверки fallback/владельцев/SQL и отдельный HTTP-тест с собственным сервером и случайным портом. Последний исполняет неизменённые stock product controller и model; SQL и вспомогательные сервисы заменены fixtures, view выводит данные canonical и крошек. Это не полноценная установка магазина или проверка Deals в браузере. Отсутствующий необязательный ru-ru language pack отмечается `not run` в test_ocmod.php, обязательный en-gb проверяется всегда.
+
+```sh
+OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload PHP=/opt/homebrew/bin/php sh tests/run.sh
+OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload php tests/test_product_navigation.php
+OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload php tests/test_product_navigation_http.php
+```
+
+Адресные SQL считаются по фактическим DB-вызовам: `product_address`, `category_address`; metadata отдельно, не более одного запроса. Входящая карта (`max/map/verify/fallback`), `incoming_path` и SQL стороннего ядра учитываются отдельно. Бюджет генерации N+K: 20 товаров в 3 категориях ≤23, в одной ≤21, без основной ≤20; повтор и отрицательный повтор — 0. Это не бюджет всей страницы и не измерение скорости.
+
+### Stand
+
+Источник инструкций и исторических результатов — внешний `SEO_PRO_STAND_TESTS_DIR`, каталог `docs/designs/product-navigation-brainstorm/stand_tests` исходной рабочей копии. Его scripts и baseline_cdecbdc не редактируются и не копируются в ветку. Новые выводы сохраняйте в `runs/<label>/`. Результаты беты не заменяют проверки кандидата.
+
+MySQL harness по умолчанию работает в `--fixtures`; также поддерживает `--read-only-benchmark` и `--stand-scenarios`. Для передачи runtime кандидата через stdin:
+
+```sh
+OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload php tests/test_product_navigation_mysql.php --bundle > /tmp/seo-pro-navigation-stdin.php
+ssh -o BatchMode=yes mozap-test@141.136.44.128 'SEO_PRO_TEST_STORE_CONFIG=/home/mozap-test/htdocs/test.mozap.ru/config.php SEO_PRO_MYSQL_MODE=--fixtures php' < /tmp/seo-pro-navigation-stdin.php
+```
+
+Реквизиты читаются токенами литеральных define без include/eval config.php. Вычисляемое определение и отсутствие подключения — `not run`, exit 2. Секреты не передаются аргументами и не печатаются. Не запускайте исторические изменяющие скрипты напрямую.
+
+Fixtures используют MyISAM, индексы query/keyword по 250 символов и уникальный `seo_pro_fx_<run>_`; runtime получает этот DB_PREFIX до выполнения SQL. В finally удаляется только собственный список таблиц, сверяются их отсутствие и COUNT/MAX настоящей seo_url. CI, CS и binary collation проверяются отдельно; недоступная collation — `not run` с именем сервера. Сравнение с независимым проходом охватывает выбор alias и множества ранних владельцев, а также реальный cafe/café fallback входящего lookup.
+
+Read-only benchmark допускает только SELECT/SHOW/EXPLAIN и вызывает настоящий Url с runtime кандидата. Он не запускает фронт-контроллер, установку схемы, просмотры или запись настроек. EXPLAIN rows — оценки; число строк результата JOIN и ms SQL показаны отдельно. Полный скан seo_url на CI-ветке — ошибка и возврат на согласование.
+
+HTTP `--stand-baseline` / `--stand-candidate` требуют `SEO_PRO_STAND_TESTS_DIR` и `SEO_PRO_STAND_VERIFIED_BUILD=baseline|candidate`, установленный после независимой проверки сборки и файлового кэша. Исходные suite и addr/canon3/mixed3 служат матрицей. Кандидат намеренно меняет ожидания товара 28 и нагрузочных N%7==0; временные сценарии требуют безопасного сценарного режима. На бете baseline 1.8 не снимается. Владелец устанавливает обе сборки через Installer и обновляет модификации. Автоматическая упаковка/установка, смена кэша, gen.php и sitemap18.sh в эти команды не входят.
+
+Без подключения стенда run.sh печатает `not run`, не PASS. Каждый отчёт должен отдельно показывать непроверенные части, совместимость с реальной темой, режим/collation, доказательство эффективного cache_engine, состояние БД до/после и пути дампов изменяющих сценариев.
+
+Сохранение подробных локальных логов: задайте `SEO_PRO_TEST_RESULTS_DIR=<runs/label/local-parts>`. run.sh сохраняет вывод каждой части и полные controller cases, чтобы отчёт мог пересчитать фактические assertions.
+
+Для свежей выборки 300 товаров / 930 HTTP-проверок используйте stdin-bundle в `--stand-scenarios` с `SEO_PRO_STAND_BUILD=baseline|candidate` и `SEO_PRO_STAND_SCENARIO=verify`; этот подрежим не меняет строки каталога. Без селектора выполняются временные keyword/route/foreign/Deals/canon3 сценарии; candidate дополнительно проверяет main/category keyword/hierarchy. Перед каждым изменяющим сценарием создаётся дамп, в finally восстанавливаются сохранённые значения и исходные ID, сверяются строки, COUNT и MAX seo_url. Никогда не выдавайте baseline-проверку за проверку кандидата.
+
+Для canon3 stdin-bundle создавайте с `SEO_PRO_STAND_TESTS_DIR`: в него войдёт только HTTP-матрица из исторических результатов. Порядок setup/cleanup сохраняется: проверки отсутствия временных страниц выполняются после их удаления. Активная сборка и неизменённый XML 1.8 проверяются перед сценарием; файловый кэш подтверждается по хешам framework/Config и цепочке default+catalog до создания Cache.
