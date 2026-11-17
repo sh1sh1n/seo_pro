@@ -87,7 +87,7 @@ function standVerifyProducts($db,$build) {
     $base='https://test.mozap.ru'; $p=DB_PREFIX; $kw=[]; $paths=[];
     foreach($db->query("SELECT `query`, keyword FROM {$p}seo_url WHERE store_id=0 AND language_id=1 AND `query` LIKE 'category_id=%' ORDER BY seo_url_id")->rows as $r)$kw[(int)substr($r['query'],12)]=$r['keyword'];
     foreach($db->query("SELECT category_id, GROUP_CONCAT(path_id ORDER BY level SEPARATOR '_') AS path FROM {$p}category_path GROUP BY category_id")->rows as $r)$paths[(int)$r['category_id']]=explode('_',$r['path']);
-    mt_srand(20261115);$checks=0;$failed=0;$times=[];
+    mt_srand(20261115);$checks=0;$failed=0;$times=[];$redirectTimes=[];$currentTimes=[];
     for($i=0;$i<300;$i++) {
         $n=mt_rand(1,100500);$id=1000000+$n;
         $rows=$db->query("SELECT category_id, main_category FROM {$p}product_to_category WHERE product_id=$id ORDER BY main_category DESC,category_id")->rows;
@@ -96,14 +96,15 @@ function standVerifyProducts($db,$build) {
         $expected=[];foreach($candidates as $category)$expected[]=$base.'/'.implode('/',array_map(function($id)use($kw){return rawurlencode($kw[$id]);},$paths[$category])).'/load-test-product-'.$n.'.html';
         if(!$expected)$expected=[$base.'/load-test-product-'.$n.'.html'];
         foreach(['/index.php?route=product/product&product_id='.$id,'/load-test-product-'.$n.'.html','/desktops/load-test-product-'.$n.'.html'] as $uri) {
-            $r=standHttpRequest($base.$uri);$times[]=$r['ms'];$checks++;
+            $r=standHttpRequest($base.$uri);$times[]=$r['ms'];if($r['status']===301)$redirectTimes[]=$r['ms'];elseif($r['status']===200)$currentTimes[]=$r['ms'];$checks++;
             $same=in_array($base.$uri,$expected,true);$ok=$same?($r['status']===200&&$r['location']===''):($r['status']===301&&in_array($r['location'],$expected,true));
             if(!$ok){$failed++;echo "FAIL sample $uri status={$r['status']} location={$r['location']}\n";}
         }
         if($i%10===0){$r=standHttpRequest($expected[0]);[$canon,$h1]=standDocument($r['body'],$base);$checks++;$h1Expected='Load test product '.$n.($n%10===0?' (H1)':'');if($r['status']!==200||!in_array($base.$canon,$expected,true)||$h1!==$h1Expected){$failed++;echo "FAIL sample card id=$id\n";}}
         if(($i+1)%50===0)echo 'sample progress products='.($i+1)."/300\n";
     }
-    sort($times);echo "load sample build=$build products=300 checks=$checks failed=$failed TTFB_median_ms=".$times[intdiv(count($times),2)].' p95_ms='.$times[(int)(count($times)*.95)]."\n";
+    sort($times);echo "load sample build=$build products=300 checks=$checks failed=$failed all_statuses_TTFB_median_ms=".$times[intdiv(count($times),2)].' p95_ms='.$times[(int)(count($times)*.95)]."\n";
+    foreach(['redirect_301'=>$redirectTimes,'current_200'=>$currentTimes]as$kind=>$values){sort($values);echo 'TTFB '.$kind.' count='.count($values).' median_ms='.($values?$values[intdiv(count($values),2)]:'not run').' p95_ms='.($values?$values[min(count($values)-1,(int)(count($values)*.95))]:'not run')."\n";}
     if($failed)throw new RuntimeException('load-product baseline differs');
 }
 
