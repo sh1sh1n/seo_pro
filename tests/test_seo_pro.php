@@ -32,12 +32,13 @@ class DB {
 	function escape($s) { return addslashes($s); }
 	function query($sql) {
 		$this->log[] = $sql;
+		$ordered = $this->seo; uksort($ordered, function ($a,$b) { return ($this->seo[$a][4] ?? $a + 1) <=> ($this->seo[$b][4] ?? $b + 1); });
 		if (strpos($sql, 'SHOW FULL COLUMNS') === 0) return new Res([['Type' => 'varchar(255)', 'Collation' => $this->collation]]);
 		if (preg_match('~FROM \(SELECT (\d+) AS (product_id|category_id)\)~', $sql, $m)) {
 			$id = (int)$m[1]; preg_match('~su.store_id = (\d+)~', $sql, $st); preg_match('~su.language_id = (\d+)~', $sql, $la);
-			$aliases = function ($query) use ($st, $la) {
+			$aliases = function ($query) use ($st, $la, $ordered) {
 				$out = [];
-				foreach ($this->seo as $i => $row) if ($row[0] == $st[1] && $row[1] == $la[1] && $row[2] === $query) {
+				foreach ($ordered as $i => $row) if ($row[0] == $st[1] && $row[1] == $la[1] && $row[2] === $query) {
 					$earlier = null;
 					foreach ($this->seo as $j => $d) if (($d[4] ?? $j + 1) < ($row[4] ?? $i + 1) && $d[0] == $row[0] && $d[1] == $row[1] && utf8_strtolower($d[3]) === utf8_strtolower($row[3])) { $earlier = $d[4] ?? $j + 1; break; }
 					$out[] = ['alias_id' => $row[4] ?? $i + 1, 'alias_query' => $row[2], 'alias_keyword' => utf8_strtolower($row[3]), 'earlier_alias_id' => $earlier];
@@ -58,24 +59,29 @@ class DB {
 		}
 		// The router of the core: a keyword of any language of the store, a query of the current language
 		if (preg_match("~^SELECT \* FROM oc_seo_url WHERE keyword = '(.*)' AND store_id = '(\d+)'$~", $sql, $m)) {
-			foreach ($this->seo as $i => $row) if ($row[3] === stripslashes($m[1]) && $row[0] == $m[2]) return new Res([['seo_url_id' => $row[4] ?? $i + 1, 'store_id' => $row[0], 'language_id' => $row[1], 'query' => $row[2], 'keyword' => $row[3]]]); return new Res([]);
+			foreach ($ordered as $i => $row) if ($row[3] === stripslashes($m[1]) && $row[0] == $m[2]) return new Res([['seo_url_id' => $row[4] ?? $i + 1, 'store_id' => $row[0], 'language_id' => $row[1], 'query' => $row[2], 'keyword' => $row[3]]]); return new Res([]);
 		}
 		if (preg_match("~^SELECT \* FROM oc_seo_url WHERE `query` = '(.*)' AND store_id = '(\d+)' AND language_id = '(\d+)'$~", $sql, $m)) {
-			foreach ($this->seo as $i => $row) if ($row[2] === stripslashes($m[1]) && $row[0] == $m[2] && $row[1] == $m[3]) return new Res([['seo_url_id' => $row[4] ?? $i + 1, 'store_id' => $row[0], 'language_id' => $row[1], 'query' => $row[2], 'keyword' => $row[3]]]); return new Res([]);
+			foreach ($ordered as $i => $row) if ($row[2] === stripslashes($m[1]) && $row[0] == $m[2] && $row[1] == $m[3]) return new Res([['seo_url_id' => $row[4] ?? $i + 1, 'store_id' => $row[0], 'language_id' => $row[1], 'query' => $row[2], 'keyword' => $row[3]]]); return new Res([]);
 		}
-		if (strpos($sql, 'SELECT MAX(seo_url_id) AS max_id FROM oc_seo_url') === 0) return new Res([['max_id' => $this->seo ? max(array_keys($this->seo)) + 1 : null]]);
+		if (strpos($sql, 'SELECT MAX(seo_url_id) AS max_id FROM oc_seo_url') === 0) return new Res([['max_id' => $this->seo ? max(array_map(function ($i) { return $this->seo[$i][4] ?? $i + 1; }, array_keys($this->seo))) : null]]);
 		if (preg_match("~FROM oc_seo_url WHERE store_id = '(\d+)' AND language_id = '(\d+)' AND keyword IN \((.*)\) ORDER BY seo_url_id$~", $sql, $m)) {
 			$in = array_map(fn($k) => stripslashes(substr($k, 1, -1)), explode(', ', $m[3]));
-			$r = []; foreach ($this->seo as $row) if ($row[0] == $m[1] && $row[1] == $m[2] && in_array(strtolower($row[3]), $in, true)) $r[] = ['keyword' => strtolower($row[3]), 'query' => $row[2]]; return new Res($r);
+			$r = []; foreach ($ordered as $row) if ($row[0] == $m[1] && $row[1] == $m[2] && in_array(strtolower($row[3]), $in, true)) $r[] = ['keyword' => strtolower($row[3]), 'query' => $row[2]]; return new Res($r);
 		}
 		if (preg_match("~FROM oc_seo_url WHERE store_id = '(\d+)' AND language_id = '(\d+)'~", $sql, $m)) {
-			$r = []; foreach ($this->seo as $row) if ($row[0] == $m[1] && $row[1] == $m[2]) $r[] = ['keyword' => strtolower($row[3]), 'query' => $row[2]]; return new Res($r);
+			$r = []; foreach ($ordered as $row) if ($row[0] == $m[1] && $row[1] == $m[2]) $r[] = ['keyword' => strtolower($row[3]), 'query' => $row[2]]; return new Res($r);
 		}
 		if (preg_match("~FROM oc_seo_url WHERE keyword = '(.*)' AND store_id = '(\d+)'~", $sql, $m)) {
 			// The current language first, as ORDER BY (language_id = ...) DESC does
-			preg_match("~language_id = '(\d+)'\) DESC~", $sql, $l); $seo = $this->seo; uasort($seo, fn($a, $b) => [$a[1] != $l[1], 0] <=> [$b[1] != $l[1], 0]);
+			preg_match("~language_id = '(\d+)'\) DESC~", $sql, $l); $seo = $ordered; uasort($seo, fn($a, $b) => [$a[1] != $l[1], 0] <=> [$b[1] != $l[1], 0]);
 			foreach ($seo as $row) if ($row[3] === stripslashes($m[1]) && $row[0] == $m[2]) return new Res([['query' => $row[2], 'keyword' => strtolower($row[3]), 'language_id' => (string)$row[1]]]); return new Res([]);
 		}
+		if (preg_match("~product_to_category WHERE product_id = '(\\d+)' AND category_id IN\\(([^)]*)\\)~", $sql, $m)) {
+            $cats = array_keys($this->main[$m[1]] ?? (isset($this->p2c[$m[1]]) ? [$this->p2c[$m[1]] => 1] : []));
+            $ids = array_map('intval', explode(',', $m[2])); $matched = array_values(array_intersect($cats, $ids));
+            return new Res($matched ? [['category_id' => $matched[0]]] : []);
+        }
 		if (preg_match("~product_to_category WHERE product_id = '(\d+)'~", $sql, $m)) return new Res(isset($this->p2c[$m[1]]) ? [['category_id' => $this->p2c[$m[1]]]] : []);
 		if (preg_match("~category_path WHERE category_id = '(\d+)'~", $sql, $m)) return new Res([['path' => $this->paths[$m[1]] ?? null]]);
 		throw new Exception("unexpected SQL $sql");
@@ -131,7 +137,7 @@ function run($uri, $method = 'GET', $opts = []) {
 function req($uri, $method = 'GET', $config = [], $server = [], $seo = []) { return run($uri, $method, ['config' => $config, 'server' => $server, 'seo' => $seo])[0]; }
 function link_($route, $args = '', $config = [], $seo = []) { [$r, $c] = boot(['config' => $config, 'seo' => $seo]); $c->index(); return $r->get('url')->link($route, $args); }
 // SQL of the request, by kind. 'core': the queries of the router of the core and of its modifications
-function sql($r, $kind) { $re = ['map' => "~FROM oc_seo_url WHERE store_id = '\d+' AND language_id = '\d+' ORDER BY~", 'fallback' => '~^SELECT `query`.* FROM oc_seo_url WHERE keyword~', 'core' => '~^SELECT \* FROM oc_seo_url~', 'max' => '~SELECT MAX\(seo_url_id\)~', 'verify' => '~AND keyword IN~', 'product_address' => '~FROM \(SELECT \d+ AS product_id\)~', 'category_address' => '~FROM \(SELECT \d+ AS category_id\)~', 'incoming_path' => '~incoming_path~', 'schema_metadata' => '~^SHOW FULL COLUMNS~', 'foreign_core' => '~^SELECT \* FROM oc_seo_url~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
+function sql($r, $kind) { $re = ['map' => "~FROM oc_seo_url WHERE store_id = '\d+' AND language_id = '\d+' ORDER BY~", 'fallback' => '~^SELECT `query`.* FROM oc_seo_url WHERE keyword~', 'core' => '~^SELECT \* FROM oc_seo_url~', 'max' => '~SELECT MAX\(seo_url_id\)~', 'verify' => '~AND keyword IN~', 'product_address' => '~FROM \(SELECT \d+ AS product_id\)~', 'category_address' => '~^(?!.*incoming_path).*FROM \(SELECT \d+ AS category_id\)~', 'incoming_path' => '~incoming_path~', 'schema_metadata' => '~^SHOW FULL COLUMNS~', 'foreign_core' => '~^SELECT \* FROM oc_seo_url~', 'product_model' => '~^SELECT DISTINCT \*, pd.name AS name~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
 // Follows the redirects of a GET request. Returns [number of redirects, last result]; more than 5 redirects is a loop.
 function follow($uri, $opts = []) {
 	for ($n = 0; $n <= 5; $n++) {

@@ -9,10 +9,23 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d)
 SERVER=
 status=0
+PART_NUMBER=0
+RESULTS=${SEO_PRO_TEST_RESULTS_DIR:-}
+[ -z "$RESULTS" ] || mkdir -p "$RESULTS"
 cleanup() { [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
-part() { name=$1; shift; if "$@" > "$TMP/log" 2>&1; then echo "PASS $name"; else echo "FAIL $name"; cat "$TMP/log"; status=1; fi; }
+part() {
+    name=$1; shift; PART_NUMBER=$((PART_NUMBER + 1))
+    if "$@" > "$TMP/log" 2>&1; then
+        echo "PASS $name"
+        grep -E '^(not run |skip |HTTP checks=|checks:|notices:)' "$TMP/log" || true
+    else echo "FAIL $name"; cat "$TMP/log"; status=1; fi
+    if [ -n "$RESULTS" ]; then
+        cp "$TMP/log" "$RESULTS/part-$PART_NUMBER.log"
+        if [ "$1" = controller ] && [ -f "$TMP/cases.txt" ]; then cp "$TMP/cases.txt" "$RESULTS/part-$PART_NUMBER-cases.log"; fi
+    fi
+}
 
 part 'php -l sources' sh -c "for f in \$(find '$ROOT/seo_pro_oc3.ocmod/upload' '$ROOT/tests' -name '*.php'); do '$PHP' -l \"\$f\" > /dev/null || exit 1; done"
 
@@ -41,7 +54,8 @@ controller() {
 	[ "$code" = 200 ] || { echo "HTTP $code"; grep -v -E '^(ok |--|$)' "$TMP/cases.txt"; return 1; }
 	kill -0 "$SERVER" 2>/dev/null || { echo 'the PHP server died during the run'; return 1; }
 	grep -q "^seo_pro cases finished $RUN_ID\$" "$TMP/cases.txt" || { echo "the answer is not a finished run of $1"; return 1; }
-	grep -E '^notices: 0, failed: 0$' "$TMP/cases.txt"
+	grep -E '^notices: 0, failed: 0$' "$TMP/cases.txt" || return 1
+	echo "checks: $(grep -c '^ok[[:space:]]' "$TMP/cases.txt")"
 }
 part 'controller (cases.php)' controller cases.php
 part 'controller, foreign records, modified core (cases_foreign.php)' controller 'cases_foreign.php?core=patched'

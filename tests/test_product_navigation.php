@@ -18,6 +18,17 @@ check('general product href', href($r, 1, ['manufacturer_id' => 5, 'sort' => 'p.
 check('generation leaves Request intact', $r->get('request')->get, $before);
 check('generation never calls model', $r->get('model_catalog_product')->calls, 0);
 check('no map in product generation', sql($r, 'map'), 0);
+foreach ([
+    'category' => ['path'=>10,'page'=>2],
+    'manufacturer' => ['manufacturer_id'=>5,'sort'=>'p.price','order'=>'ASC','page'=>2],
+    'search/tag' => ['search'=>'tyre','tag'=>'offroad','page'=>3],
+    'featured module' => [],
+    'related products' => ['path'=>'10_11']
+] as $origin => $extras) {
+    [$r,$c]=nav(); $expected='http://shop.test/moto/enduro/tyre.html';
+    if ($origin==='search/tag') $expected.='?search=tyre&amp;tag=offroad';
+    check('stock generator input: '.$origin,href($r,1,$extras),$expected);
+}
 foreach (['none' => [], 'multiple' => [10 => 1, 11 => 1]] as $name => $marks) {
     [$r, $c] = nav(); $r->get('db')->main[1] = $marks;
     check($name . ' main: short', href($r, 1), 'http://shop.test/tyre.html');
@@ -35,12 +46,14 @@ foreach ([0,1,3] as $k) {
     for ($i = 200; $i < 220; $i++) href($r, $i);
     check("20 products K=$k address SQL", sql($r, 'product_address') + sql($r, 'category_address'), 20 + $k);
     check("20 products K=$k metadata", sql($r, 'schema_metadata'), 1);
+    check("20 products K=$k all SQL includes only address and metadata", sql($r, 'all'), 21 + $k);
     $count = count($db->log); for ($i = 200; $i < 220; $i++) href($r, $i);
     check("20 products K=$k repeat SQL", count($db->log) - $count, 0);
 }
 
 foreach (['product_id=90','category_id=90','manufacturer_id=90','information_id=90','product/search','foreign_id=90','product_id=bad'] as $owner) {
-    [$r, $c] = nav(); $r->get('db')->seo = [[0,1,$owner,'SAME',1],[0,1,'product_id=1','same',2]];
+    [$r, $c] = nav(); $r->get('db')->seo = [[0,1,$owner,'SAME',1],[0,1,'product_id=1','same',2],[0,1,'category_id=10','moto',3],[0,1,'category_id=11','enduro',4]];
+    check('blocked product alias: ' . $owner, call($c,'readProductAddressData',1)['keyword'], null);
     check('first owner ' . $owner, href($r,1), 'http://shop.test/index.php?route=product/product&amp;path=10_11&amp;product_id=1');
 }
 [$r, $c] = nav(); $db = $r->get('db'); $db->seo[] = [0,1,'product_id=1','new-name',100]; $db->seo[] = [0,1,'product_id=1','tyre',101];

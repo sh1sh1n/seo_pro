@@ -245,5 +245,10 @@ $db = new MetadataDB(); $db->fail = true; $config = new Config(); $log = new Log
 check('metadata denied: exact', Seo_pro_schema::keywordPrefilterMode($config, $db, $log), 'exact');
 check('metadata error diagnostic has no exception detail', strpos(implode(' ', $log->l), 'private'), false);
 Seo_pro_schema::keywordPrefilterMode($config, $db, $log); check('failed metadata memoized', $db->calls, 1);
+$db = new MetadataDB(); $config = new Config(); $log = new Log();
+check('missing metadata row: exact', Seo_pro_schema::keywordPrefilterMode($config,$db,$log), 'exact');
+Seo_pro_schema::keywordPrefilterMode($config,$db,$log); check('missing metadata memoized', $db->calls, 1);
+$db = new MetadataDB(); $db->row = ['Type' => 'varbinary(255)', 'Collation' => null]; $config = new Config();
+check('binary type metadata: exact', Seo_pro_schema::keywordPrefilterMode($config,$db,$log), 'exact');
 echo "\nfailed: $fail\n";
 exit($fail ? 1 : 0);

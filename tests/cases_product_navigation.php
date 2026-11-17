@@ -80,6 +80,8 @@ try {
     } catch (Redirect $e) { $startup = $model->calls; header('Location: ' . $e->url, true, $e->status); }
     header('X-Startup-Product-Calls: ' . $startup); header('X-Card-Entered: ' . $entered);
     header('X-Notices: ' . $notices);
+    $groups=[]; foreach (['product_address','category_address','incoming_path','schema_metadata','max','map','verify','fallback','foreign_core','product_model','all'] as $kind) $groups[$kind]=sql($r,$kind);
+    header('X-SQL-Groups: ' . json_encode($groups));
     foreach ($response->headers as $h) header($h);
     if ($notices) http_response_code(500);
     echo $response->body;
