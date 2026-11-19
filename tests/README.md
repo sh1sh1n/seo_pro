@@ -51,22 +51,22 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 `tests/run.sh` включает Url-проверки fallback/владельцев/SQL и отдельный HTTP-тест с собственным сервером и случайным портом. Последний исполняет неизменённые stock product controller и model; SQL и вспомогательные сервисы заменены fixtures, view выводит данные canonical и крошек. Это не полноценная установка магазина или проверка Deals в браузере. Отсутствующий необязательный ru-ru language pack отмечается `not run` в test_ocmod.php, обязательный en-gb проверяется всегда.
 
 ```sh
-OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload PHP=/opt/homebrew/bin/php sh tests/run.sh
-OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload php tests/test_product_navigation.php
-OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload php tests/test_product_navigation_http.php
+OC_DIR=/path/to/opencart-3.0.5.1/upload PHP=/path/to/php sh tests/run.sh
+OC_DIR=/path/to/opencart-3.0.5.1/upload php tests/test_product_navigation.php
+OC_DIR=/path/to/opencart-3.0.5.1/upload php tests/test_product_navigation_http.php
 ```
 
 Адресные SQL считаются по фактическим DB-вызовам: `product_address`, `category_address`; metadata отдельно, не более одного запроса. Входящая карта (`max/map/verify/fallback`), `incoming_path` и SQL стороннего ядра учитываются отдельно. Бюджет генерации N+K: 20 товаров в 3 категориях ≤23, в одной ≤21, без основной ≤20; повтор и отрицательный повтор — 0. Это не бюджет всей страницы и не измерение скорости.
 
 ### Stand
 
-Источник инструкций и исторических результатов — внешний `SEO_PRO_STAND_TESTS_DIR`, каталог `docs/designs/product-navigation-brainstorm/stand_tests` исходной рабочей копии. Его scripts и baseline_cdecbdc не редактируются и не копируются в ветку. Новые выводы сохраняйте в `runs/<label>/`. Результаты беты не заменяют проверки кандидата.
+Источник инструкций и исторических результатов — внешний каталог `SEO_PRO_STAND_TESTS_DIR`; он не входит в репозиторий и не редактируется. Новые выводы сохраняйте в `runs/<label>/`. Результаты беты не заменяют проверки кандидата.
 
 MySQL harness по умолчанию работает в `--fixtures`; также поддерживает `--read-only-benchmark` и `--stand-scenarios`. Для передачи runtime кандидата через stdin:
 
 ```sh
-OC_DIR=/private/tmp/seo-audit-core/opencart-3.0.5.1/upload php tests/test_product_navigation_mysql.php --bundle > /tmp/seo-pro-navigation-stdin.php
-ssh -o BatchMode=yes mozap-test@141.136.44.128 'SEO_PRO_TEST_STORE_CONFIG=/home/mozap-test/htdocs/test.mozap.ru/config.php SEO_PRO_MYSQL_MODE=--fixtures php' < /tmp/seo-pro-navigation-stdin.php
+OC_DIR=/path/to/opencart-3.0.5.1/upload php tests/test_product_navigation_mysql.php --bundle > /tmp/seo-pro-navigation-stdin.php
+ssh -o BatchMode=yes stand-alias 'SEO_PRO_TEST_STORE_CONFIG=/remote/path/to/config.php SEO_PRO_MYSQL_MODE=--fixtures php' < /tmp/seo-pro-navigation-stdin.php
 ```
 
 Реквизиты читаются токенами литеральных define без include/eval config.php. Вычисляемое определение и отсутствие подключения — `not run`, exit 2. Секреты не передаются аргументами и не печатаются. Не запускайте исторические изменяющие скрипты напрямую.
@@ -93,7 +93,7 @@ TTFB выборки 300 товаров выводится отдельно дл�
 
 ### Supervised MySQL verification (opt-in)
 
-Отдельный от legacy-режимов путь: `tests/run_product_navigation_mysql.sh` (локальный оркестратор), `tests/product_navigation_supervisor.php` (supervisor/worker/IPC/ledger) и эмиттер `test_product_navigation_mysql.php --emit-supervised`. `run.sh` не запускает supervised-режимы и SSH/MySQL не трогает; его 20-я часть выполняет только офлайн-проверки: `test_product_navigation_supervisor.php`, затем (тем же `PHP`, только при успехе) `run_product_navigation_mysql.sh --self-test`.
+Отдельный от legacy-режимов путь: `tests/run_product_navigation_mysql.sh` (локальный оркестратор), `tests/product_navigation_supervisor.php` (supervisor/worker/IPC/ledger) и эмиттер `test_product_navigation_mysql.php --emit-supervised`. `run.sh` не запускает supervised-режимы и SSH/MySQL не трогает; его supervisor-часть выполняет только офлайн-проверки: `test_product_navigation_supervisor.php`, затем (тем же `PHP`, только при успехе) `run_product_navigation_mysql.sh --self-test`.
 
 Legacy-режимы `--fixtures`, `--read-only-benchmark`, `--stand-scenarios`, `--bundle` не изменены. Их HTTP-части (`--stand-scenarios`, `--stand-baseline`/`--stand-candidate`) проверяют **установленную** в магазине сборку и требуют `SEO_PRO_STAND_VERIFIED_BUILD` после установки через Installer. Supervised-режим ничего не устанавливает и не опирается на установленные файлы: сборка (baseline 1.8 или кандидат) передаётся через stdin, её идентичность — sha256 bundle-манифеста, а не хеши установленного модуля. Эти два вида идентичности не подменяют друг друга.
 
@@ -108,7 +108,16 @@ sh tests/run_product_navigation_mysql.sh --self-test       # офлайн: чи�
 
 `REPORT.md` дополнительно содержит агрегацию таймингов: median/min/max по ровно 3 повторам со status 0 (`completed` или `completed-with-measurement-gaps`: пробелы опционального ROWS_EXAMINED агрегацию не блокируют) с совпадающими launcher/core-источниками (не зависят от сборки), хешем config и хешами definition/schema набора (для read-only — sample_sha256); runtime-хеш сборки должен быть стабилен между повторами одной сборки, но baseline и candidate по нему никогда не сравниваются; абсолютные baseline и candidate плюс парные дельты (candidate − baseline), cold/warm/repeat и instrumented series / worker SQL раздельно. Forced-exact — только candidate, помечен как diagnostic, без дельты. Неполные или несовпавшие пары не считаются; при раннем отказе (например, preflight) отчёт показывает 0 завершённых пар. Сырые данные остаются в `chunks/<id>/`.
 
-Необязательные: `SEO_PRO_REMOTE_RUN_BASE`, `SEO_PRO_REMOTE_PHP`, `SEO_PRO_EVIDENCE_DIR` (вывод в `execution/<run-id>/`, каталог не должен существовать). `--fake-transport=<abs-exe>` заменяет только ssh; такой прогон помечен `transport=fake` и не является свидетельством стенда. Эмиттер вызывается оркестратором с `OC_DIR`, `SEO_PRO_RUNTIME_DIR`, `SEO_PRO_BUILD_LABEL=baseline|candidate`, `SEO_PRO_CASE_MANIFEST`, `SEO_PRO_EMIT_MANIFEST_OUT`; реквизиты БД в bundle не попадают, удалённо передаётся только путь к config.
+Необязательные: `SEO_PRO_REMOTE_RUN_BASE`, `SEO_PRO_REMOTE_PHP`, `SEO_PRO_EVIDENCE_DIR` (вывод в `execution/<run-id>/`, каталог не должен существовать). По умолчанию evidence пишется в локальный каталог обзора `docs/designs/product-navigation-brainstorm/remediation-review-2026-11-17`, если он существует; в свежем клоне его нет, поэтому задайте существующий абсолютный каталог **вне** checkout (иначе вывод сделает worktree грязным):
+
+```sh
+mkdir -p "$HOME/seo-pro-evidence"
+SEO_PRO_EVIDENCE_DIR="$HOME/seo-pro-evidence" PHP=php OC_DIR=/path/to/opencart-3.0.5.1/upload \
+  SEO_PRO_TEST_STORE_CONFIG=/remote/path/to/config.php \
+  sh tests/run_product_navigation_mysql.sh --preflight --fake-transport=/abs/path/to/fake-transport
+```
+
+Идентичность кандидата (только для реальных режимов; `--plan` и `--self-test` офлайн и git/worktree не проверяют): кандидат — фактический полный `HEAD` checkout, у которого минимальный опорный коммит `499faaa43a7b32cad46a677cdc563b58da20ecdf` является предком (`git merge-base --is-ancestor`); worktree должен быть чистым (никаких tracked, staged или untracked изменений), иначе ничего не отправляется. `HEAD` фиксируется один раз и записывается в `manifest.json` как `candidate_head` вместе с `candidate_floor_commit`; чистый baseline 1.8 закреплён на `cdecbdc63a347aab44923bda0be30a251f42f496`. Перед каждой отправкой chunk (до чтения часов) повторно проверяются тот же `HEAD`, чистота worktree, sha256 всех хешированных в манифесте исходников и sha256 bundle; при расхождении chunk не запускается (status 1, `source-changed-before-launch`). `--fake-transport=<abs-exe>` заменяет только ssh; такой прогон помечен `transport=fake` и не является свидетельством стенда. Эмиттер вызывается оркестратором с `OC_DIR`, `SEO_PRO_RUNTIME_DIR`, `SEO_PRO_BUILD_LABEL=baseline|candidate`, `SEO_PRO_CASE_MANIFEST`, `SEO_PRO_EMIT_MANIFEST_OUT`; реквизиты БД в bundle не попадают, удалённо передаётся только путь к config.
 
 Границы: файлы магазина не копируются и не меняются; shop-таблицы только читаются (SELECT/SHOW/EXPLAIN, запись отклоняется до отправки). Фикстуры — собственные таблицы `pnsx_<run>_`, каждая регистрируется в ledger до CREATE; удаляются только подтверждённые собственные таблицы (включая `tainted` с подтверждённым владением); recovery-пунктами остаются `ownership-uncertain` и неразрешённые `tainted`. Лимиты на chunk: 180 s подачи, 1000 workload SELECT, 6000 прочих операторов, отдельно 30 s cleanup; отмена KILL QUERY с 2 s (setup 10 s). Весь запуск: ≤90 chunks и 900 s; расписание `--all` — 83 chunk, без повторов. Первый ненулевой chunk останавливает дальнейшую отправку.
 
@@ -116,6 +125,11 @@ Exit/статус: 0 выполнено; 1 assertion/protocol; 2 отсутст�
 
 Метрики не смешиваются: ROWS_EXAMINED (Performance Schema, только при точной атрибуции к оператору worker) — опциональна; при недоступности помечается unmeasured, и итог `completed-with-measurement-gaps` даже при exit 0. fetched_rows и EXPLAIN-оценки — отдельные метки, не examined rows. Время: прямая длительность запроса worker отдельно от event/ACK и от полной инструментированной серии Url; censored-по-deadline сэмплы не считаются успешными. Тайминги — три парные повторности (baseline/candidate, candidate/baseline, baseline/candidate; порядок не сбалансирован), median/min/max без p95 и значимости.
 
-Это не приёмка скорости и не интеграционная приёмка: ни exit 0, ни три сэмпла, ни вызов `--all` не означают, что полная матрица выполнена или релиз готов. Реальная тема, Deals и чистая установка OpenCart остаются отдельными проверками.
+Это не приёмка скорости и не интеграционная приёмка: ни exit 0, ни три сэмпла, ни вызов `--all` не означают, что полная матрица выполнена или релиз готов. Проверки установленного магазина и чистой установки OpenCart выполняются отдельно (см. ниже).
 
-Наблюдаемое состояние (только факты): 106 офлайн-проверок supervisor (PHP) и 495/495 HTTP; необязательный ru-ru отсутствует (`not run`), Deals не проверялся. Итоговый прогон suite с `--self-test` в 20-й части выполняется; его результат и официальный preflight фиксируются в отчёте прогона (`REPORT.md` в `execution/<run-id>/`), а не здесь. Read-only инвентаризация на авторизованном стенде: MySQL 8.4.11-11, Performance Schema включена; учётная запись получила 1142 для threads, user_variables_by_thread, variables_by_thread и statement history; как preflight обработает это для идентичности и ROWS_EXAMINED, не проверено. Полный supervised preflight не запускался; фикстур и MySQL-измерений нет.
+### Результаты версии 1.8
+
+- Итоговый локальный `run.sh`: 20/20 частей, в том числе 495 HTTP-проверок, 106 офлайн-проверок supervisor (PHP) и `--self-test` оркестратора; необязательный ru-ru отсутствовал (`not run`).
+- Установленный тестовый магазин с Deals: 50 HTTP-сценариев, 21 цепочка 301→200; артефакты и OCMOD совпали с опубликованным архивом; новых записей в журналах PHP/OpenCart нет.
+- Свежая чистая установка OpenCart не проверялась.
+- Официальный supervised-запуск c001: exit 2 `preflight-control-unavailable`; worker, фикстуры и матрица не запускались, реальных измерений SQL нет.

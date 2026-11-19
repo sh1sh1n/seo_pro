@@ -16,15 +16,23 @@
 # Optional overrides (secure defaults; no further required settings):
 #   SEO_PRO_REMOTE_RUN_BASE     absolute REMOTE base dir; run dir is <base>/seo-pro-pns-<run-id>
 #                               (default base /tmp; random run id; <= 200 chars; carried in each case manifest)
-#   SEO_PRO_EVIDENCE_DIR        local review dir (default: <repo>/docs/designs/product-navigation-
-#                               brainstorm/remediation-review-2026-11-17); output goes to
-#                               execution/<run-id>/ (must not exist yet)
+#   SEO_PRO_EVIDENCE_DIR        existing local evidence dir (default: <repo>/docs/designs/product-navigation-
+#                               brainstorm/remediation-review-2026-11-17, a local review folder that
+#                               fresh clones do not have; then set this to an existing absolute dir
+#                               OUTSIDE the checkout); output goes to execution/<run-id>/ (must not
+#                               exist yet)
 #   SEO_PRO_REMOTE_PHP          optional remote PHP binary (default: php)
 #
 # Guarantees implemented here (see the design, sections 4 and 6):
-#   * Before ANY ssh: input validation, candidate HEAD + allowlist check, read-only git export of the
+#   * Before ANY ssh: input validation, candidate identity (full HEAD must descend from the floor
+#     commit 499faaa via git merge-base --is-ancestor; worktree must be clean: no tracked, staged or
+#     untracked changes), read-only git export of the
 #     clean 1.8 baseline into a private mktemp dir, php -l of all sources, sha256 of all sources,
 #     the immutable manifest.json with the fixed 83-chunk schedule, and the preflight bundle.
+#   * Before EVERY dispatch (before the clock is read): HEAD is still the captured candidate_head, the
+#     worktree is still clean, and every hashed source still matches its manifest sha256; otherwise
+#     that chunk is not launched (status 1).
+#   * --plan and --self-test are offline and perform no git/worktree validation.
 #   * After the preflight chunk: engine/collations/server/sample are frozen from its authenticated
 #     workload case evidence into preflight.json; every later case manifest and bundle is generated,
 #     validated and linted before the next ssh. Emission failure stops before ssh.
@@ -79,26 +87,17 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PHP=${PHP:-php}
 
 # ---------------------------------------------------------------- frozen constants (do not widen)
-CANDIDATE_HEAD=04afaf7782dfe029169c5ff6262f5b2bb5ffe23a
+# Candidate floor: the verified merged source commit on main. The audited candidate is the actual full
+# HEAD of a CLEAN checkout that has this commit as an ancestor (git merge-base --is-ancestor); that HEAD
+# is captured once and recorded in manifest.json as candidate_head (plus candidate_floor_commit).
+CANDIDATE_FLOOR_COMMIT=499faaa43a7b32cad46a677cdc563b58da20ecdf
+CANDIDATE_HEAD=
 BASELINE_COMMIT=cdecbdc63a347aab44923bda0be30a251f42f496
 RUNTIME_FILES='seo_pro_oc3.ocmod/upload/catalog/controller/extension/startup/seo_pro.php
 seo_pro_oc3.ocmod/upload/system/library/seo_pro_schema.php
 seo_pro_oc3.ocmod/upload/system/library/seo_pro_cache.php'
 TEST_SOURCES='tests/test_product_navigation_mysql.php
 tests/product_navigation_supervisor.php'
-ALLOWLIST='seo_pro_oc3.ocmod/upload/catalog/controller/extension/startup/seo_pro.php
-seo_pro_oc3.ocmod/upload/system/library/seo_pro_schema.php
-tests/cases.php
-tests/test_seo_pro.php
-tests/test_product_navigation_http.php
-tests/test_schema.php
-tests/test_product_navigation_mysql.php
-tests/product_navigation_supervisor.php
-tests/test_product_navigation_supervisor.php
-tests/run_product_navigation_mysql.sh
-tests/run.sh
-tests/README.md
-docs/product-navigation.md'
 COLLATIONS='utf8mb4_general_ci utf8mb4_unicode_ci utf8mb4_0900_as_cs utf8mb4_bin'
 CI_COLLATIONS='utf8mb4_general_ci utf8mb4_unicode_ci'
 VARIANTS='clean conflict'
@@ -1476,19 +1475,51 @@ done > "$TMP/schedule.tsv"
 [ "$(cut -f10 "$TMP/schedule.tsv" | grep -Ec "$RE_PREFIX")" = "$SCHEDULE_TOTAL" ] || { OVERALL=1; finalize fixture-prefix-contract; }
 [ "$(cut -f10 "$TMP/schedule.tsv" | sort -u | wc -l | tr -d ' ')" = "$SCHEDULE_TOTAL" ] || { OVERALL=1; finalize fixture-prefix-not-unique; }
 
-# ---------------------------------------------------------------- pre-SSH: candidate identity, allowlist, baseline export
+# ---------------------------------------------------------------- pre-SSH: candidate identity, clean worktree, baseline export
+# Only this run's own evidence directory is excluded from the clean check, and only when the evidence
+# base lies inside the checkout (the documented setup keeps it outside, so nothing is excluded).
+case $EVID in "$ROOT"/*) EVID_PATHSPEC=":(exclude)${EVID#"$ROOT"/}" ;; *) EVID_PATHSPEC= ;; esac
+# worktree_status OUT: porcelain status of tracked, staged and untracked (incl. ignored-not) changes.
+worktree_status() {
+    if [ -n "$EVID_PATHSPEC" ]; then
+        git -C "$ROOT" status --porcelain=v1 --untracked-files=all -- . "$EVID_PATHSPEC" > "$1"
+    else
+        git -C "$ROOT" status --porcelain=v1 --untracked-files=all > "$1"
+    fi
+}
 check_candidate() {
-    head=$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}') || return 1
+    case $CANDIDATE_FLOOR_COMMIT in ????????????????????????????????????????) : ;; *) echo 'internal: floor commit is not a full sha'; return 1 ;; esac
+    head=$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}') || { echo 'cannot resolve HEAD'; return 1; }
+    if valid '^[0-9a-f]{40}$' "$head"; then :; else echo "HEAD is not a full sha: $head"; return 1; fi
     echo "candidate HEAD $head"
-    [ "$head" = "$CANDIDATE_HEAD" ] || { echo "unexpected HEAD (expected $CANDIDATE_HEAD); not auditing another revision"; return 1; }
-    git -C "$ROOT" status --porcelain=v1 --untracked-files=all > "$TMP/git-status" || return 1
-    bad=0
-    while IFS= read -r l; do
-        p=${l#???}
-        case $l in R*|C*|' D'*|D*) echo "rename/copy/delete not allowed: $p"; bad=1; continue ;; esac
-        case "$NL$ALLOWLIST$NL" in *"$NL$p$NL"*) echo "changed (allowlisted): $p" ;; *) echo "changed outside allowlist: $p"; bad=1 ;; esac
-    done < "$TMP/git-status"
-    return $bad
+    git -C "$ROOT" cat-file -e "$CANDIDATE_FLOOR_COMMIT^{commit}" || { echo "floor commit $CANDIDATE_FLOOR_COMMIT missing"; return 1; }
+    if git -C "$ROOT" merge-base --is-ancestor "$CANDIDATE_FLOOR_COMMIT" "$head"; then
+        echo "floor $CANDIDATE_FLOOR_COMMIT is an ancestor of HEAD"
+    else
+        echo "HEAD does not descend from floor $CANDIDATE_FLOOR_COMMIT; not auditing this revision"; return 1
+    fi
+    worktree_status "$TMP/git-status" || { echo 'git status failed'; return 1; }
+    if [ -s "$TMP/git-status" ]; then
+        echo 'worktree not clean (tracked, staged or untracked changes); commit or remove them first:'
+        cat "$TMP/git-status"; return 1
+    fi
+    echo 'worktree clean'
+    printf '%s\n' "$head" > "$TMP/candidate-head"
+}
+# source_guard: run before every dispatch; HEAD, clean worktree and every hashed source (candidate,
+# baseline export, stock OC) must be unchanged since hash_sources recorded them in manifest.json.
+source_guard() {
+    h=$(git -C "$ROOT" rev-parse --verify 'HEAD^{commit}' 2>/dev/null) || return 1
+    [ -n "$CANDIDATE_HEAD" ] && [ "$h" = "$CANDIDATE_HEAD" ] || return 1
+    worktree_status "$TMP/guard-status" 2>/dev/null || return 1
+    [ ! -s "$TMP/guard-status" ] || return 1
+    while IFS=$TAB read -r want tag; do
+        f=${tag#*:}
+        case $tag in candidate:*) p=$ROOT/$f ;; baseline:*) p=$TMP/baseline/$f ;; stock:*) p=$OC_DIR/$f ;; *) return 1 ;; esac
+        got=$(helper sha "$p" 2>/dev/null) || return 1
+        [ "$got" = "$want" ] || return 1
+    done < "$TMP/hashes.tsv"
+    return 0
 }
 export_baseline() {
     git -C "$ROOT" cat-file -e "$BASELINE_COMMIT^{commit}" || { echo 'baseline commit missing'; return 1; }
@@ -1520,7 +1551,7 @@ write_manifest() {
     {
         printf 'design\tapproved-context/design_draft.md (Phase C/E fixed schedule)\n'
         printf 'run_id\t%s\nmode\t%s\nstages\t%s\ntransport\t%s\n' "$RUN_ID" "$MODE" "$STAGES" "$TRANSPORT"
-        printf 'candidate_head\t%s\nbaseline_commit\t%s\n' "$CANDIDATE_HEAD" "$BASELINE_COMMIT"
+        printf 'candidate_head\t%s\ncandidate_floor_commit\t%s\nbaseline_commit\t%s\n' "$CANDIDATE_HEAD" "$CANDIDATE_FLOOR_COMMIT" "$BASELINE_COMMIT"
         printf 'ssh_target_sha256\t%s\nremote_config_path\t%s\nremote_run_dir\t%s\nremote_php\t%s\n' "$(helper shastr "$SSH_TARGET")" "$STORE_CONFIG" "$REMOTE_RUN_DIR" "$REMOTE_PHP"
         printf 'global_seconds\t%s\nglobal_chunks\t%s\nchunk_seconds\t%s\ncleanup_seconds\t%s\n' "$GLOBAL_SECONDS" "$GLOBAL_CHUNKS_MAX" "$CHUNK_SECONDS" "$CLEANUP_SECONDS"
         printf 'max_select\t%s\nmax_other\t%s\nwatchdog_extra_seconds\t%s\nschedule_total\t%s\n' "$MAX_SELECT" "$MAX_OTHER" "$WATCHDOG_EXTRA" "$SCHEDULE_TOTAL"
@@ -1539,6 +1570,9 @@ write_manifest() {
 }
 
 local_part candidate-identity check_candidate
+# Captured once (local_part runs in this shell, but the value is read from the file it wrote).
+CANDIDATE_HEAD=$(cat "$TMP/candidate-head" 2>/dev/null)
+if valid '^[0-9a-f]{40}$' "$CANDIDATE_HEAD"; then :; else OVERALL=$(worse "$OVERALL" 1); finalize stopped-before-ssh:candidate-head-unrecorded; fi
 local_part baseline-export export_baseline
 local_part source-lint lint_sources
 local_part source-hashes hash_sources
@@ -1633,6 +1667,8 @@ dispatch() {
         C_STATUS=1; C_GAPS=0; C_FIND=local-run-dir; return 1
     fi
     bsha=$(bundle_sha "$cid")
+    # Sources/HEAD/worktree must be unchanged since hashing + bundling; checked before the clock read.
+    if source_guard && [ -n "$bsha" ] && [ "$(helper sha "$TMP/bundles/$cid.php" 2>/dev/null)" = "$bsha" ]; then :; else C_STATUS=1; C_GAPS=0; C_FIND=source-changed-before-launch; return 1; fi
 
     now=$(mono_ms)
     if valid '^[0-9]{1,19}$' "$now"; then :; else C_STATUS=1; C_GAPS=0; C_FIND=local-monotonic-clock; return 1; fi
