@@ -129,11 +129,11 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 
 ## Authors
 
-Author: [Yesvik](http://opencartforum.ru/user/6876-yesvik/), 2011 (opencartforum.com, ocStore)
+Author: [Yesvik](http://opencartforum.com/user/6876-yesvik/), 2011 (opencartforum.com, ocStore)
 
 ### Contributors
 
 Opencart 3.x
 
 * [eniarku](https://github.com/eniarku/)
-* https://github.com/opencartbot
+* [opencartbot](https://github.com/opencartbot)
