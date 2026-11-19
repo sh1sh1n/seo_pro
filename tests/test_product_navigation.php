@@ -76,6 +76,38 @@ check('next request sees product rename', href($next,1), 'http://shop.test/renam
 unset($db->seo[0]); [$next, $c] = nav(['db' => $db, 'cache' => $cache]);
 check('next request sees product keyword deletion', href($next,1), 'http://shop.test/index.php?route=product/product&amp;path=10&amp;product_id=1');
 $n = count($db->log); href($next,1); check('negative keyword repeat SQL', count($db->log) - $n, 0);
+// prefetchProducts(): the model of products hands over the ids of a list, the links then cost no SQL
+foreach ([0,1,3] as $k) {
+    $fill = function ($db) use ($k) {
+        for ($i = 200; $i < 220; $i++) { $db->seo[] = [0,1,'product_id=' . $i, 'p' . $i, 1000 + $i]; $db->main[$i] = $k ? [10 + ($i % $k) => 1] : []; }
+        $db->paths[12] = '12'; $db->categories[12] = ['parent_id' => 0, 'status' => 1, 'store' => 1, 'language' => 1]; $db->seo[] = [0,1,'category_id=12','third',2000];
+    };
+    [$plain, $c] = nav(); $fill($plain->get('db')); $expected = []; for ($i = 200; $i < 220; $i++) $expected[$i] = href($plain, $i);
+    [$r, $c] = nav(); $db = $r->get('db'); $fill($db);
+    $c->prefetchProducts(range(200, 219));
+    check("prefetch K=$k one product query", sql($r, 'product_address_batch') + sql($r, 'product_address'), 1);
+    check("prefetch K=$k category queries", sql($r, 'category_address_batch') + sql($r, 'category_address'), $k ? 1 : 0);
+    $n = count($db->log); $got = []; for ($i = 200; $i < 220; $i++) $got[$i] = href($r, $i);
+    check("prefetch K=$k links cost no SQL", count($db->log) - $n, 0);
+    check("prefetch K=$k links equal one by one", $got, $expected);
+}
+[$r, $c] = nav(); $db = $r->get('db');
+$c->prefetchProducts(array_merge(range(5000, 6200), ['bad', 0, -1, '007', 5000, [1]]));
+check('prefetch 1201 ids: batches of 500', sql($r, 'product_address_batch'), 3);
+check('prefetch: an unknown id is memoized without a keyword', call($c, 'readProductAddressData', 6200), ['keyword' => null, 'main_category_id' => null]);
+$n = count($db->log); $c->prefetchProducts([5000, 1]); $new = array_slice($db->log, $n);
+check('prefetch: only the new id is read, as one id', count(preg_grep('~FROM \(SELECT 1 AS product_id\) p~', $new)) . '/' . count(preg_grep('~AS product_id~', $new)), '1/1');
+$c->prefetchProducts('not a list'); $c->prefetchProducts([]);
+check('prefetch: no list, no SQL', count($db->log) - $n, count($new));
+[$r, $c] = nav(['config' => ['config_seo_url_type' => 'default']]); $c->prefetchProducts([1, 2]);
+check('prefetch: standard SEO URL type reads nothing', sql($r, 'all'), 0);
+[$r, $c] = nav(['config' => ['config_seo_url_include_path' => 0]]); $c->prefetchProducts([1, 2]);
+check('prefetch: path off reads no category', sql($r, 'category_address') + sql($r, 'category_address_batch'), 0);
+[$r, $c] = nav(); $db = $r->get('db'); $cache = $r->get('cache'); $c->prefetchProducts([1]); href($r, 1);
+$db->seo[0][3] = 'prefetched-rename'; $db->main[1] = [10 => 1]; [$next, $c] = nav(['db' => $db, 'cache' => $cache]); $c->prefetchProducts([1]);
+check('prefetch: the next request sees a rename and a new main category', href($next, 1), 'http://shop.test/moto/prefetched-rename.html');
+[, $reg] = run('/');
+check('index() hands the controller to the model of products', $reg->get('seo_pro_links') instanceof ControllerExtensionStartupSeoPro, true);
 [$r, $c] = nav(); $before = href($r,1); $r->get('config')->set('config_language_id',2);
 check('language context is independent', href($r,1), 'http://shop.test/index.php?route=product/product&amp;path=10_11&amp;product_id=1');
 // The language-2 category aliases are absent; the hierarchy itself is available in these fixtures.

@@ -585,6 +585,16 @@ $_['error_seo_pro_h1_schema'] = 'Увага: колонка бази даних 
             <add position="after"><![CDATA[
 				'meta_h1'          => isset($query->row['meta_h1']) ? $query->row['meta_h1'] : '',]]></add>
         </operation>
+        <operation error="skip">
+            <!-- getProducts, getProductSpecials, getLatestProducts, getPopularProducts, getBestSellerProducts, getProductRelated:
+                 the addresses of the whole list are read in one query before its links are built, also for a list taken from the cache -->
+            <search><![CDATA[return $product_data;]]></search>
+            <add position="before"><![CDATA[		// SEO Pro: the addresses of the products of the list, one query per 500 ids
+		if ($product_data && is_object($this->registry->get('seo_pro_links'))) {
+			$this->registry->get('seo_pro_links')->prefetchProducts(array_keys($product_data));
+		}
+]]></add>
+        </operation>
     </file>
 
     <file path="catalog/controller/product/product.php">

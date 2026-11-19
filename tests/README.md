@@ -56,7 +56,7 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload php tests/test_product_navigation.php
 OC_DIR=/path/to/opencart-3.0.5.1/upload php tests/test_product_navigation_http.php
 ```
 
-Адресные SQL считаются по фактическим DB-вызовам: `product_address`, `category_address`; metadata отдельно, не более одного запроса. Входящая карта (`max/map/verify/fallback`), `incoming_path` и SQL стороннего ядра учитываются отдельно. Бюджет генерации N+K: 20 товаров в 3 категориях ≤23, в одной ≤21, без основной ≤20; повтор и отрицательный повтор — 0. Это не бюджет всей страницы и не измерение скорости.
+Адресные SQL считаются по фактическим DB-вызовам: `product_address`, `category_address`; metadata отдельно, не более одного запроса. Входящая карта (`max/map/verify/fallback`), `incoming_path` и SQL стороннего ядра учитываются отдельно. Бюджет генерации N+K: 20 товаров в 3 категориях ≤23, в одной ≤21, без основной ≤20; повтор и отрицательный повтор — 0. Пакетное чтение `prefetchProducts()` (`product_address_batch`, `category_address_batch`): 20 товаров — один запрос товаров и не больше одного запроса категорий, затем ссылки без SQL и те же, что при чтении по одному; 1201 id — три пакета по 500. Это не бюджет всей страницы и не измерение скорости.
 
 ### Stand
 

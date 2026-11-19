@@ -62,6 +62,9 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		// Add rewrite to url class
 		if ($this->config->get('config_seo_url')) {
 			$this->url->addRewrite($this);
+
+			// The model of products hands the ids of a list to prefetchProducts() before the links are built
+			$this->registry->set('seo_pro_links', $this);
 		} else {
 			return;
 		}
@@ -830,55 +833,110 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		return $keyword;
 	}
 
+	// Ids of products and categories read by one batched query at most
+	const ADDRESS_BATCH = 500;
+
 	private function readProductAddressData($product_id) {
 		$key = $this->addressContext() . $product_id;
-		if (array_key_exists($key, $this->product_addresses)) return $this->product_addresses[$key];
+		if (!array_key_exists($key, $this->product_addresses)) $this->readProductAddresses(array((int)$product_id));
+		return $this->product_addresses[$key];
+	}
+
+	/**
+	 * Reads the address data of the products a list is about to link to, one query per ADDRESS_BATCH ids,
+	 * and of their main categories. Called by the model of products before it returns a list; the data is
+	 * kept for this request only, so the next request still reads the current tables.
+	 */
+	public function prefetchProducts($product_ids) {
+		if (!is_array($product_ids) || !$this->config->get('config_seo_url') || $this->config->get('config_seo_url_type') !== 'seo_pro') return;
+		$ids = array();
+		foreach ($product_ids as $id) if (Seo_pro_schema::isId($id)) $ids[(int)$id] = true;
+		$ids = array_keys($ids);
+		if (!$ids) return;
+		$this->readProductAddresses($ids);
+		if (!$this->config->get('config_seo_url_include_path')) return;
+		$categories = array();
+		foreach ($ids as $id) {
+			$main = $this->product_addresses[$this->addressContext() . $id]['main_category_id'];
+			if ($main) $categories[$main] = true;
+		}
+		$this->readProductCategories(array_keys($categories));
+	}
+
+	// The derived table of ids: "(SELECT 5 AS product_id UNION ALL SELECT 7 AS product_id)"
+	private function idTable(array $ids, $name) {
+		return "(SELECT " . implode(" UNION ALL SELECT ", array_map(function ($id) use ($name) { return (int)$id . " AS " . $name; }, $ids)) . ")";
+	}
+
+	private function readProductAddresses(array $product_ids) {
+		$context = $this->addressContext();
+		$ids = array();
+		foreach ($product_ids as $id) if (!array_key_exists($context . (int)$id, $this->product_addresses)) $ids[] = (int)$id;
 		$pc = !$this->config->get('seo_pro_schema_failed');
-		$sql = "SELECT p.product_id, " . ($pc ? "pc.category_id, pc.main_category" : "NULL AS category_id, 0 AS main_category") .
-			", su.seo_url_id AS alias_id, su.`query` AS alias_query, LOWER(su.keyword) AS alias_keyword, d.seo_url_id AS earlier_alias_id" .
-			" FROM (SELECT " . (int)$product_id . " AS product_id) p" .
-			($pc ? " LEFT JOIN " . DB_PREFIX . "product_to_category pc ON pc.product_id = p.product_id" : "") .
-			$this->addressAliasJoin("CONCAT('product_id=', p.product_id)") .
-			" ORDER BY su.seo_url_id" . ($pc ? ", pc.category_id" : "") . ", d.seo_url_id";
-		$rows = $this->db->query($sql)->rows;
-		$main = array();
-		foreach ($rows as $row) if ($row['category_id'] !== null && (int)$row['main_category'] === 1) $main[(int)$row['category_id']] = true;
-		return $this->product_addresses[$key] = array('keyword' => $this->selectOwnedKeyword($rows, 'product_id=' . (int)$product_id), 'main_category_id' => count($main) === 1 ? (int)key($main) : null);
+		foreach (array_chunk($ids, self::ADDRESS_BATCH) as $chunk) {
+			$sql = "SELECT p.product_id, " . ($pc ? "pc.category_id, pc.main_category" : "NULL AS category_id, 0 AS main_category") .
+				", su.seo_url_id AS alias_id, su.`query` AS alias_query, LOWER(su.keyword) AS alias_keyword, d.seo_url_id AS earlier_alias_id" .
+				" FROM " . $this->idTable($chunk, 'product_id') . " p" .
+				($pc ? " LEFT JOIN " . DB_PREFIX . "product_to_category pc ON pc.product_id = p.product_id" : "") .
+				$this->addressAliasJoin("CONCAT('product_id=', p.product_id)") .
+				" ORDER BY " . (count($chunk) > 1 ? "p.product_id, " : "") . "su.seo_url_id" . ($pc ? ", pc.category_id" : "") . ", d.seo_url_id";
+			$rows = array_fill_keys($chunk, array());
+			foreach ($this->db->query($sql)->rows as $row) if (isset($rows[(int)$row['product_id']])) $rows[(int)$row['product_id']][] = $row;
+			foreach ($rows as $product_id => $product_rows) {
+				$main = array();
+				foreach ($product_rows as $row) if ($row['category_id'] !== null && (int)$row['main_category'] === 1) $main[(int)$row['category_id']] = true;
+				$this->product_addresses[$context . $product_id] = array('keyword' => $this->selectOwnedKeyword($product_rows, 'product_id=' . $product_id), 'main_category_id' => count($main) === 1 ? (int)key($main) : null);
+			}
+		}
 	}
 
 	private function readProductCategoryData($category_id, $incoming = false) {
 		$key = $this->addressContext() . $category_id;
-		if (array_key_exists($key, $this->product_categories)) return $this->product_categories[$key];
+		if (!array_key_exists($key, $this->product_categories)) $this->readProductCategories(array((int)$category_id), $incoming);
+		return $this->product_categories[$key];
+	}
+
+	private function readProductCategories(array $category_ids, $incoming = false) {
+		$context = $this->addressContext();
+		$ids = array();
+		foreach ($category_ids as $id) if (!array_key_exists($context . (int)$id, $this->product_categories)) $ids[] = (int)$id;
 		$store = (int)$this->config->get('config_store_id');
 		$language = (int)$this->config->get('config_language_id');
-		$sql = "SELECT root.category_id AS requested_category_id, cp.path_id, cp.level, c.category_id AS existing_category_id, c.parent_id, c.status," .
-			" cs.store_id AS available_store_id, cd.category_id AS translated_category_id, su.seo_url_id AS alias_id, su.`query` AS alias_query," .
-			" LOWER(su.keyword) AS alias_keyword, d.seo_url_id AS earlier_alias_id FROM (SELECT " . (int)$category_id . " AS category_id) root" .
-			" LEFT JOIN " . DB_PREFIX . "category_path cp ON cp.category_id = root.category_id" .
-			" LEFT JOIN " . DB_PREFIX . "category c ON c.category_id = cp.path_id" .
-			" LEFT JOIN " . DB_PREFIX . "category_to_store cs ON cs.category_id = cp.path_id AND cs.store_id = " . $store .
-			" LEFT JOIN " . DB_PREFIX . "category_description cd ON cd.category_id = cp.path_id AND cd.language_id = " . $language .
-			$this->addressAliasJoin("CONCAT('category_id=', cp.path_id)") .
-			" ORDER BY cp.level, su.seo_url_id, d.seo_url_id" . ($incoming ? " /* incoming_path */" : "");
-		$rows = $this->db->query($sql)->rows;
+		foreach (array_chunk($ids, self::ADDRESS_BATCH) as $chunk) {
+			$sql = "SELECT root.category_id AS requested_category_id, cp.path_id, cp.level, c.category_id AS existing_category_id, c.parent_id, c.status," .
+				" cs.store_id AS available_store_id, cd.category_id AS translated_category_id, su.seo_url_id AS alias_id, su.`query` AS alias_query," .
+				" LOWER(su.keyword) AS alias_keyword, d.seo_url_id AS earlier_alias_id FROM " . $this->idTable($chunk, 'category_id') . " root" .
+				" LEFT JOIN " . DB_PREFIX . "category_path cp ON cp.category_id = root.category_id" .
+				" LEFT JOIN " . DB_PREFIX . "category c ON c.category_id = cp.path_id" .
+				" LEFT JOIN " . DB_PREFIX . "category_to_store cs ON cs.category_id = cp.path_id AND cs.store_id = " . $store .
+				" LEFT JOIN " . DB_PREFIX . "category_description cd ON cd.category_id = cp.path_id AND cd.language_id = " . $language .
+				$this->addressAliasJoin("CONCAT('category_id=', cp.path_id)") .
+				" ORDER BY " . (count($chunk) > 1 ? "root.category_id, " : "") . "cp.level, su.seo_url_id, d.seo_url_id" . ($incoming ? " /* incoming_path */" : "");
+			$rows = array_fill_keys($chunk, array());
+			foreach ($this->db->query($sql)->rows as $row) if (isset($rows[(int)$row['requested_category_id']])) $rows[(int)$row['requested_category_id']][] = $row;
+			foreach ($rows as $category_id => $category_rows) $this->product_categories[$context . $category_id] = $this->categoryAddress($category_id, $category_rows);
+		}
+	}
+
+	private function categoryAddress($category_id, array $rows) {
 		$result = array('valid' => false, 'path' => '', 'keywords' => array());
 		$segments = array(); $levels = array();
 		foreach ($rows as $row) {
-			if ($row['path_id'] === null || $row['existing_category_id'] === null || (int)$row['status'] !== 1 || $row['available_store_id'] === null || $row['translated_category_id'] === null) return $this->product_categories[$key] = $result;
+			if ($row['path_id'] === null || $row['existing_category_id'] === null || (int)$row['status'] !== 1 || $row['available_store_id'] === null || $row['translated_category_id'] === null) return $result;
 			$id = (int)$row['path_id']; $level = (int)$row['level'];
-			if ((isset($levels[$level]) && $levels[$level] !== $id) || (isset($segments[$id]) && (int)$segments[$id]['level'] !== $level)) return $this->product_categories[$key] = $result;
+			if ((isset($levels[$level]) && $levels[$level] !== $id) || (isset($segments[$id]) && (int)$segments[$id]['level'] !== $level)) return $result;
 			$levels[$level] = $id; $segments[$id] = $row;
 		}
 		ksort($levels, SORT_NUMERIC); $parent = 0; $level = 0;
 		foreach ($levels as $n => $id) {
-			if ($n !== $level++ || (int)$segments[$id]['parent_id'] !== $parent) return $this->product_categories[$key] = $result;
+			if ($n !== $level++ || (int)$segments[$id]['parent_id'] !== $parent) return $result;
 			$parent = $id;
 		}
-		if (!$levels || $parent !== (int)$category_id) return $this->product_categories[$key] = $result;
+		if (!$levels || $parent !== (int)$category_id) return $result;
 		$result['valid'] = true;
 		$result['path'] = implode('_', $levels);
 		foreach ($levels as $id) $result['keywords'][] = $this->selectOwnedKeyword(array_values(array_filter($rows, function ($row) use ($id) { return (int)$row['path_id'] === $id; })), 'category_id=' . $id);
-		return $this->product_categories[$key] = $result;
+		return $result;
 	}
 
 	private function buildProductBaseAddress($product_id, $https) {

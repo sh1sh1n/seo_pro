@@ -34,7 +34,16 @@ class DB {
 		$this->log[] = $sql;
 		$ordered = $this->seo; uksort($ordered, function ($a,$b) { return ($this->seo[$a][4] ?? $a + 1) <=> ($this->seo[$b][4] ?? $b + 1); });
 		if (strpos($sql, 'SHOW FULL COLUMNS') === 0) return new Res([['Type' => 'varchar(255)', 'Collation' => $this->collation]]);
-		if (preg_match('~FROM \(SELECT (\d+) AS (product_id|category_id)\)~', $sql, $m)) {
+		// One id "(SELECT 5 AS product_id)" or a batch "(SELECT 5 AS product_id UNION ALL SELECT 7 AS product_id)"
+		if (preg_match('~FROM \((SELECT \d+ AS (product_id|category_id)(?: UNION ALL SELECT \d+ AS \2)*)\)~', $sql, $m)) {
+			preg_match_all('~SELECT (\d+) AS~', $m[1], $all); $batch = [];
+			foreach ($all[1] as $one) { $m[1] = $one; $batch = array_merge($batch, $this->addressRows($sql, $m, $ordered)); }
+			return new Res($batch);
+		}
+		return $this->rest($sql, $ordered);
+	}
+	function addressRows($sql, $m, $ordered) {
+		{
 			$id = (int)$m[1]; preg_match('~su.store_id = (\d+)~', $sql, $st); preg_match('~su.language_id = (\d+)~', $sql, $la);
 			$aliases = function ($query) use ($st, $la, $ordered) {
 				$out = [];
@@ -55,8 +64,10 @@ class DB {
 					foreach ($aliases('category_id=' . $cat) as $a) $out[] = ['requested_category_id' => $id, 'path_id' => $cat, 'level' => $level, 'existing_category_id' => $c ? $cat : null, 'parent_id' => $c['parent_id'] ?? null, 'status' => $c['status'] ?? 0, 'available_store_id' => $c && !empty($c['store']) ? (int)$st[1] : null, 'translated_category_id' => $c && !empty($c['language']) ? $cat : null] + $a;
 				}
 			}
-			return new Res($out);
+			return $out;
 		}
+	}
+	function rest($sql, $ordered) {
 		// The router of the core: a keyword of any language of the store, a query of the current language
 		if (preg_match("~^SELECT \* FROM oc_seo_url WHERE keyword = '(.*)' AND store_id = '(\d+)'$~", $sql, $m)) {
 			foreach ($ordered as $i => $row) if ($row[3] === stripslashes($m[1]) && $row[0] == $m[2]) return new Res([['seo_url_id' => $row[4] ?? $i + 1, 'store_id' => $row[0], 'language_id' => $row[1], 'query' => $row[2], 'keyword' => $row[3]]]); return new Res([]);
@@ -138,7 +149,7 @@ function run($uri, $method = 'GET', $opts = []) {
 function req($uri, $method = 'GET', $config = [], $server = [], $seo = []) { return run($uri, $method, ['config' => $config, 'server' => $server, 'seo' => $seo])[0]; }
 function link_($route, $args = '', $config = [], $seo = []) { [$r, $c] = boot(['config' => $config, 'seo' => $seo]); $c->index(); return $r->get('url')->link($route, $args); }
 // SQL of the request, by kind. 'core': the queries of the router of the core and of its modifications
-function sql($r, $kind) { $re = ['map' => "~FROM oc_seo_url WHERE store_id = '\d+' AND language_id = '\d+' ORDER BY~", 'fallback' => '~^SELECT `query`.* FROM oc_seo_url WHERE keyword~', 'core' => '~^SELECT \* FROM oc_seo_url~', 'max' => '~SELECT MAX\(seo_url_id\)~', 'verify' => '~AND keyword IN~', 'product_address' => '~FROM \(SELECT \d+ AS product_id\)~', 'category_address' => '~^(?!.*incoming_path).*FROM \(SELECT \d+ AS category_id\)~', 'incoming_path' => '~incoming_path~', 'schema_metadata' => '~^SHOW FULL COLUMNS~', 'foreign_core' => '~^SELECT \* FROM oc_seo_url~', 'product_model' => '~^SELECT DISTINCT \*, pd.name AS name~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
+function sql($r, $kind) { $re = ['map' => "~FROM oc_seo_url WHERE store_id = '\d+' AND language_id = '\d+' ORDER BY~", 'fallback' => '~^SELECT `query`.* FROM oc_seo_url WHERE keyword~', 'core' => '~^SELECT \* FROM oc_seo_url~', 'max' => '~SELECT MAX\(seo_url_id\)~', 'verify' => '~AND keyword IN~', 'product_address' => '~FROM \(SELECT \d+ AS product_id\)~', 'product_address_batch' => '~FROM \(SELECT \d+ AS product_id UNION ALL~', 'category_address_batch' => '~FROM \(SELECT \d+ AS category_id UNION ALL~', 'category_address' => '~^(?!.*incoming_path).*FROM \(SELECT \d+ AS category_id\)~', 'incoming_path' => '~incoming_path~', 'schema_metadata' => '~^SHOW FULL COLUMNS~', 'foreign_core' => '~^SELECT \* FROM oc_seo_url~', 'product_model' => '~^SELECT DISTINCT \*, pd.name AS name~', 'all' => '~~'][$kind]; return count(preg_grep($re, $r->get('db')->log)); }
 // Follows the redirects of a GET request. Returns [number of redirects, last result]; more than 5 redirects is a loop.
 function follow($uri, $opts = []) {
 	for ($n = 0; $n <= 5; $n++) {
