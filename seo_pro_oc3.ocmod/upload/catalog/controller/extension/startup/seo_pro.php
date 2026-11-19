@@ -967,27 +967,46 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		if (!isset($original['product_id']) || !Seo_pro_schema::isId($original['product_id'])) { $this->productNotFound(); return; }
 		$id = (int)$original['product_id'];
 		$https = $this->isHttps();
-		$base = $https ? $this->config->get('config_ssl') : $this->config->get('config_url');
-		$base = preg_match('~^(?:[^/]*/){3}~', $base, $match) ? $match[0] : substr($base, 0, 1);
+		// The base the stock Url selects: config_ssl only for a secure request with a nonempty value, else config_url.
+		// Its origin is taken, REQUEST_URI already carries the subdirectory of the store
+		$base = ($https && $this->config->get('config_ssl')) ? $this->config->get('config_ssl') : $this->config->get('config_url');
+		$base = preg_match('~^(?:[^/]*/){3}~', (string)$base, $match) ? $match[0] : substr((string)$base, 0, 1);
 		$url = str_replace('&amp;', '&', $base . ltrim($this->request->server['REQUEST_URI'] ?? '', '/'));
-		$extras = $this->decodeQuery($original);
-		$build = function () use ($id, $extras, $https) {
-			$this->hits = array(); $this->core_used = false;
-			try { $seo = str_replace('&amp;', '&', $this->buildProductLink($id, $extras, $https)); $hits = $this->hits; }
-			finally { $this->hits = null; }
-			return array($seo, $hits);
+		// The arguments of the link: the parameters of the request with the one layer of Request::clean() removed, once,
+		// without the route and with the validated id. Url serializes them, every rewriter of the chain parses them
+		$args = $this->decodeQuery($original);
+		unset($args['route']);
+		$args['product_id'] = $id;
+		// One build through the registered Url chain. Request GET and Registry Url are not touched; the transient fields
+		// are scoped to the build and returned, their entry values are back on every exit
+		$build = function () use ($args, $https) {
+			$entry_hits = $this->hits;
+			$entry_core_used = $this->core_used;
+			$this->hits = array();
+			$this->core_used = false;
+			try {
+				$seo = str_replace('&amp;', '&', $this->url->link('product/product', $args, $https));
+				$hits = $this->hits;
+				$core_used = $this->core_used;
+			} finally {
+				$this->hits = $entry_hits;
+				$this->core_used = $entry_core_used;
+			}
+			return array($seo, $hits, $core_used);
 		};
-		list($seo, $hits) = $build();
+		list($seo, $hits, $core_used) = $build();
 		if (urldecode($url) === urldecode($seo)) return;
+		// At most one freshness rebuild and one core-disabled rebuild, the target is compared after each, no loop
 		if (!$this->isMapCurrent($hits)) {
 			$this->loadCache(true);
-			list($seo, $hits) = $build();
+			list($seo, $hits, $core_used) = $build();
 			if (urldecode($url) === urldecode($seo)) return;
 		}
-		if ($this->core_used && !$this->opensRoute($seo, 'product/product')) {
+		if ($core_used && !$this->opensRoute($seo, 'product/product')) {
+			$core_off = $this->core_off;
 			$this->core_off = true;
-			try { list($seo, $hits) = $build(); }
-			finally { $this->core_off = false; }
+			try { list($seo, $hits, $core_used) = $build(); }
+			finally { $this->core_off = $core_off; }
 			if (urldecode($url) === urldecode($seo)) return;
 		}
 		$this->load->model('catalog/product');

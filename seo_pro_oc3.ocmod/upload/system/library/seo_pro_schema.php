@@ -94,7 +94,11 @@ class Seo_pro_schema {
 			$collation = strtolower((string)($row['Collation'] ?? ''));
 			if (preg_match('/^(?:var)?char\(/', $type) && preg_match('/^utf8(?:mb3|mb4)?_(?:general_ci|unicode_ci|unicode_520_ci|0900_ai_ci|0900_as_ci)$/D', $collation)) $mode = 'ci';
 		} catch (\Throwable $e) {
-			if ($log) $log->write('SEO Pro: keyword collation metadata unavailable; exact ownership comparison is used');
+			// The diagnostic is best-effort: a failing log must not prevent the conservative mode from being stored
+			try {
+				if ($log) $log->write('SEO Pro: keyword collation metadata unavailable; exact ownership comparison is used');
+			} catch (\Throwable $log_error) {
+			}
 		}
 		$config->set('seo_pro_keyword_prefilter_mode', $mode);
 		return $mode;

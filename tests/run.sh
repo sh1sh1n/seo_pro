@@ -67,6 +67,11 @@ part 'product navigation (own HTTP server, stock card and model)' env OC_DIR="$O
 echo 'not run stand MySQL/HTTP: run explicit stand modes after verifying the installed build'
 
 part 'schema' "$PHP" "$ROOT/tests/test_schema.php"
+# Offline supervisor protocol: disposable local PHP workers, fake control/clock, then the orchestrator's
+# offline --self-test (propagation, aggregation) with the same PHP; no SSH, no MySQL. Stops at the first failure.
+part 'product navigation supervisor (offline protocol, fake control/clock, orchestrator self-test)' \
+    sh -c '"$1" "$2/tests/test_product_navigation_supervisor.php" && PHP=$1 sh "$2/tests/run_product_navigation_mysql.sh" --self-test' \
+    pns-supervisor "$PHP" "$ROOT"
 part 'cache resets' "$PHP" "$ROOT/tests/test_cache.php" "$TMP/out"
 part 'product categories' "$PHP" "$ROOT/tests/test_product_categories.php" "$TMP/out"
 part 'seo_url audit' "$PHP" "$ROOT/tests/test_audit.php"

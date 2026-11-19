@@ -250,5 +250,23 @@ check('missing metadata row: exact', Seo_pro_schema::keywordPrefilterMode($confi
 Seo_pro_schema::keywordPrefilterMode($config,$db,$log); check('missing metadata memoized', $db->calls, 1);
 $db = new MetadataDB(); $db->row = ['Type' => 'varbinary(255)', 'Collation' => null]; $config = new Config();
 check('binary type metadata: exact', Seo_pro_schema::keywordPrefilterMode($config,$db,$log), 'exact');
+
+echo "\n-- R2: the metadata query and its diagnostic both fail\n";
+// A log whose write() throws; counts the attempts
+class ThrowingLog { public $attempts = 0; private $error; function __construct($error) { $this->error = $error; } function write($m) { $this->attempts++; throw $this->error; } }
+function prefilter($config, $db, $log) { try { return [Seo_pro_schema::keywordPrefilterMode($config, $db, $log), null]; } catch (\Throwable $e) { return [null, get_class($e) . ': ' . $e->getMessage()]; } }
+foreach (['RuntimeException' => new RuntimeException('log is down'), 'TypeError' => new TypeError('log handle')] as $kind => $error) {
+    $db = new MetadataDB(); $db->fail = true; $config = new Config(); $log = new ThrowingLog($error);
+    check("metadata and logger ($kind) throw: exact is returned, nothing escapes", prefilter($config, $db, $log), ['exact', null]);
+    check("metadata and logger ($kind) throw: exact is stored for the request", [$config->get('seo_pro_keyword_prefilter_mode'), $config->sets], ['exact', ['seo_pro_keyword_prefilter_mode']]);
+    check("metadata and logger ($kind) throw: one metadata query, one diagnostic attempt", [$db->calls, $log->attempts], [1, 1]);
+    check("metadata and logger ($kind) throw: the repeat reuses exact", prefilter($config, $db, $log), ['exact', null]);
+    check("metadata and logger ($kind) throw: the repeat queries no metadata and does not log again", [$db->calls, $log->attempts, $config->sets], [1, 1, ['seo_pro_keyword_prefilter_mode']]);
+}
+// Successful detection does not touch the log: a broken log changes nothing
+foreach (['utf8mb4_unicode_ci' => 'ci', 'utf8mb4_bin' => 'exact'] as $collation => $expected) {
+    $db = new MetadataDB(); $db->row = ['Type' => 'varchar(255)', 'Collation' => $collation]; $config = new Config(); $log = new ThrowingLog(new RuntimeException('log is down'));
+    check("detection $collation with a broken log: unchanged", [prefilter($config, $db, $log), prefilter($config, $db, $log), $db->calls, $log->attempts], [[$expected, null], [$expected, null], 1, 0]);
+}
 echo "\nfailed: $fail\n";
 exit($fail ? 1 : 0);

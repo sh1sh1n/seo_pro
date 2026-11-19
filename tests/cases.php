@@ -163,7 +163,51 @@ $r->get('config')->d['config_store_id'] = 1;
 check('store 1 gets its own map', [$r->get('url')->link('product/product', 'product_id=3'), $r->get('url')->link('product/product', 'product_id=2'), sql($r, 'map')], ['http://shop.test/foo.html', 'http://shop.test/index.php?route=product/product&amp;product_id=2', 1]);
 $r->get('config')->d['config_store_id'] = 0; $r->get('config')->d['config_language_id'] = 2;
 check('language 2 gets its own map', [$r->get('url')->link('product/product', 'product_id=1'), sql($r, 'map')], ['http://shop.test/shina.html', 1]);
-check('each map has its own cache key', array_keys($r->get('cache')->d), ['seo_pro.0.1']);
+// Product links read their addresses by SQL and never load the map of the new scope: this is not evidence of map isolation,
+// which is checked below with information pages
+check('product links of other scopes load no persistent map', array_keys($r->get('cache')->d), ['seo_pro.0.1']);
+
+echo "\n-- persistent map isolation by store and language (information/information, native route)\n";
+// The regression as [name, got, expected] rows, so that the negative probe can run it with a cache that shares one key
+function map_isolation($cache) {
+	$scopes = [[0, 1], [1, 1], [0, 2], [1, 2]]; $out = [];
+	$db = new DB();
+	foreach ($scopes as [$s, $l]) $db->seo[] = [$s, $l, 'information_id=4', "info-s$s-l$l"];
+	$link = function ($s, $l, $r) { $r->get('config')->d['config_store_id'] = $s; $r->get('config')->d['config_language_id'] = $l; return $r->get('url')->link('information/information', 'information_id=4'); };
+	$scope = function ($s, $l) use ($db, $cache) { [$r, $c] = boot(['db' => $db, 'cache' => $cache, 'config' => ['config_store_id' => $s, 'config_language_id' => $l]]); $r->get('url')->addRewrite($c); return [$r, $c]; };
+	foreach (['cold' => [[1], 1], 'warm' => [[], 0]] as $phase => [$sets, $maps]) {
+		foreach ($scopes as [$s, $l]) {
+			$key = "seo_pro.$s.$l"; $cache->gets = []; $cache->sets = [];
+			[$r, $c] = $scope($s, $l);
+			$out[] = ["$phase $key: href of its own alias", $link($s, $l, $r), "http://shop.test/info-s$s-l$l.html"];
+			$out[] = ["$phase $key: cache get and set keys", [$cache->gets, $cache->sets], [[$key], $sets ? [$key] : []]];
+			$out[] = ["$phase $key: full map SELECTs, MAX checks counted separately, no other SQL", [sql($r, 'map'), sql($r, 'max'), sql($r, 'all')], [$maps, 1, $maps + 1]];
+			$out[] = ["$phase $key: no core rewrite, the router of the core is never asked", [sql($r, 'core'), prop($c, 'core'), prop($c, 'core_links')], [0, false, []]];
+		}
+		if ($phase === 'cold') {
+			$keys = array_keys($cache->d); sort($keys);
+			$out[] = ['cold: exactly the four persisted keys', $keys, ['seo_pro.0.1', 'seo_pro.0.2', 'seo_pro.1.1', 'seo_pro.1.2']];
+			foreach ($scopes as [$s, $l]) {
+				$map = $cache->d["seo_pro.$s.$l"] ?? [];
+				$out[] = ["cold seo_pro.$s.$l: stored map of its scope", [$map['queries']['information_id=4'] ?? null, $map['keywords']["info-s$s-l$l"] ?? null, count($map['keywords'] ?? []), $map['foreign'] ?? null, $map['max_id'] ?? null], ["info-s$s-l$l", 'information_id=4', 1, false, 4]];
+			}
+		}
+	}
+	// One controller switches scopes and returns to an earlier one: each switch reads its own stored map, none is built
+	$cache->gets = []; $cache->sets = [];
+	[$r, $c] = $scope(0, 1); $hrefs = []; $order = [[0, 1], [1, 1], [1, 2], [0, 2], [0, 1]];
+	foreach ($order as [$s, $l]) $hrefs[] = $link($s, $l, $r);
+	$out[] = ['same controller: hrefs follow the scope, also back to the first one', $hrefs, array_map(function ($x) { return "http://shop.test/info-s{$x[0]}-l{$x[1]}.html"; }, $order)];
+	$out[] = ['same controller: one get per switch, no set', [$cache->gets, $cache->sets], [array_map(function ($x) { return "seo_pro.{$x[0]}.{$x[1]}"; }, $order), []]];
+	$out[] = ['same controller: no full map SELECT, one MAX check', [sql($r, 'map'), sql($r, 'max')], [0, 1]];
+	return $out;
+}
+foreach (map_isolation(new Cache()) as [$name, $got, $exp]) check('map isolation, ' . $name, $got, $exp);
+// Negative probe: the same regression with one shared key must fail, otherwise it would only check hrefs, not isolation
+$broken = array_values(array_filter(map_isolation(new SharedKeyCache()), function ($x) { return $x[1] !== $x[2]; }));
+check('negative probe: a shared map key fails the isolation regression', count($broken) > 0, true);
+check('negative probe: wrong scoped hrefs are detected', count(array_filter($broken, function ($x) { return strpos($x[0], 'href') !== false; })) > 0, true);
+check('negative probe: the shared persisted key is detected', count(array_filter($broken, function ($x) { return strpos($x[0], 'cache get and set keys') !== false || strpos($x[0], 'persisted keys') !== false; })) > 0, true);
 
 echo "\n-- 1.6.3 F2: the kinds of query\n";
 [$r, $c] = boot([]);
