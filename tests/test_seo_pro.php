@@ -172,7 +172,7 @@ function prop($o, $name, ...$value) { $p = new ReflectionProperty($o, $name); if
 // Negative probe of the map-isolation regression: a cache that stores every map of a store/language under one shared key,
 // as a runtime that ignored the scope would. Test double only; the runtime keys are never changed
 class SharedKeyCache extends Cache {
-	function shared($k) { return preg_match('~^seo_pro\.\d+\.\d+$~D', $k) ? 'seo_pro.shared' : $k; }
+	function shared($k) { return preg_match('~^seo_pro\.\d+\.\d+(\.k\.\d\d)?$~D', $k, $m) ? 'seo_pro.shared' . ($m[1] ?? '') : $k; }
 	function get($k) { return parent::get($this->shared($k)); }
 	function set($k, $v) { parent::set($this->shared($k), $v); }
 }
@@ -271,8 +271,11 @@ function nav_install($r, $c, $nav) {
 	if (!empty($nav['stale'])) {
 		// The map as loadCache() itself builds it, then keywords renamed in the cached copy only: MAX(seo_url_id) still matches
 		$tmp = new ControllerExtensionStartupSeoPro($r); call($tmp, 'loadCache');
-		$cache = $r->get('cache'); $key = 'seo_pro.' . (int)$config->get('config_store_id') . '.' . (int)$config->get('config_language_id'); $map = $cache->d[$key];
-		foreach ($nav['stale'] as $old => $new) { $query = $map['keywords'][$old]; unset($map['keywords'][$old]); $map['keywords'][$new] = $query; $map['queries'][$query] = $new; }
+		$cache = $r->get('cache'); $st = (int)$config->get('config_store_id'); $la = (int)$config->get('config_language_id'); $key = Seo_pro_cache::mapKey($st, $la); $map = $cache->d[$key];
+		foreach ($nav['stale'] as $old => $new) {
+			$from = Seo_pro_cache::keywordKey($st, $la, $old); $to = Seo_pro_cache::keywordKey($st, $la, $new);
+			$query = $cache->d[$from]['keywords'][$old]; unset($cache->d[$from]['keywords'][$old]); $cache->d[$to]['keywords'][$new] = $query; $map['queries'][$query] = $new;
+		}
 		$cache->d[$key] = $map; $cache->gets = []; $cache->sets = []; $r->get('db')->log = [];
 	}
 	$probe = new NavProbe($r, $c); $followers = [$probe];

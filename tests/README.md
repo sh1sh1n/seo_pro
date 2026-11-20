@@ -13,12 +13,12 @@ OC_DIR=/path/to/opencart-3.0.5.1/upload sh tests/run.sh
 | Part | Command | Fails with |
 |---|---|---|
 | OCMOD: `install.xml` applied to the core the way Refresh does | `php tests/ocmod_sim.php --check=install.xml <core with upload/> <out dir> $OC_DIR/system/modification.xml seo_pro_oc3.ocmod/install.xml` | exit code 1 |
-| Controller: links, decoding, redirects, cached paths in groups (a miss writes only its group, a group is read once per request) | `curl -f http://127.0.0.1:8765/cases.php` under `OC_DIR=... php -S 127.0.0.1:8765 -t tests` | HTTP 500 |
+| Controller: links, decoding, redirects, cached paths in groups (a miss writes only its group, a group is read once per request), keywords of the map in groups (a request reads only the groups of its address; a missing group or one of another build rebuilds the map once) | `curl -f http://127.0.0.1:8765/cases.php` under `OC_DIR=... php -S 127.0.0.1:8765 -t tests` | HTTP 500 |
 | OCMOD: the synthetic extension `tests/foreign.ocmod.xml` (its own kinds of `seo_url.query` in `index()` and `rewrite()` of the router of the core) applied with `install.xml` | `php tests/ocmod_sim.php <core with upload/> <foreign dir> $OC_DIR/system/modification.xml tests/foreign.ocmod.xml seo_pro_oc3.ocmod/install.xml` | exit code 1 |
 | Controller, records of other extensions, the router of the core changed by the synthetic extension: links, addresses, parameters of the visitor, redirects, queries, records changed with a warm cache; a store without foreign records | `curl -f 'http://127.0.0.1:8765/cases_foreign.php?core=patched'` under the same server started with `SEO_PRO_FOREIGN_DIR=<foreign dir>` | HTTP 500 |
 | The same records with the unmodified router of the core: 404, plain links | `curl -f 'http://127.0.0.1:8765/cases_foreign.php?core=stock'` | HTTP 500 |
 | Schema installer; the rule of an id: `Seo_pro_schema::isId()` without leading zeros, `categoryId()` with them | `php tests/test_schema.php` | exit code 1 |
-| Cache resets: every group of paths of both kinds, the keys of 1.7, the maps | `php tests/test_cache.php <out dir>` | exit code 1 |
+| Cache resets: every group of paths of both kinds, the keys of 1.7, the maps and their groups of keywords | `php tests/test_cache.php <out dir>` | exit code 1 |
 | Main category of a product: add, edit, copy | `php tests/test_product_categories.php <out dir>` | exit code 1 |
 | `audit_seo_url.php --tsv`: foreign and unsupported records, wrong input is never a clean result | `php tests/test_audit.php` | exit code 1 |
 | SEO settings of the default store and of additional stores | `OC_DIR=... php tests/test_store_settings.php <out dir>` | exit code 1 |

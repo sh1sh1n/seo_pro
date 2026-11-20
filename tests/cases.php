@@ -144,7 +144,8 @@ check('unknown path that is a whole-address keyword still opens', [$x['route'] ?
 check('keyword -> query, current language', call($c, 'getQueryByKeyword', 'moto'), 'category_id=10');
 check('keyword -> query, other language needs the fallback', [call($c, 'getQueryByKeyword', 'shina'), call($c, 'getQueryByKeyword', 'shina', true)], [null, 'product_id=1']);
 check('keyword -> query, unknown is null', call($c, 'getQueryByKeyword', 'nope', true), null);
-check('duplicate keyword belongs to the first query', [call($c, 'getQueryByKeyword', 'tyre'), call($c, 'getKeywordByQuery', 'product_id=1'), call($c, 'getKeywordByQuery', 'product_id=6')], ['product_id=1', 'tyre', null]);
+check('duplicate keyword belongs to the first query', [call($c, 'getQueryByKeyword', 'tyre'), $r->get('url')->link('product/product', 'product_id=1'), $r->get('url')->link('product/product', 'product_id=6')], ['product_id=1', 'http://shop.test/moto/enduro/tyre.html', 'http://shop.test/index.php?route=product/product&amp;product_id=6']);
+check('the map keeps no queries of products: their links are built from their own records', [call($c, 'getKeywordByQuery', 'product_id=1'), call($c, 'getKeywordByQuery', 'category_id=10')], [null, 'moto']);
 check('query -> keyword and back', call($c, 'getQueryByKeyword', call($c, 'getKeywordByQuery', 'information/contact')), 'information/contact');
 check('query -> keyword knows only the current language', call($c, 'getKeywordByQuery', 'product_id=3'), null);
 [$r, $c] = boot(['seo' => [[0,1,'','blank'], [0,1,'information_id=8','']]]); $c->index();
@@ -165,9 +166,13 @@ $r->get('config')->d['config_store_id'] = 0; $r->get('config')->d['config_langua
 check('language 2 gets its own map', [$r->get('url')->link('product/product', 'product_id=1'), sql($r, 'map')], ['http://shop.test/shina.html', 1]);
 // Product links read their addresses by SQL and never load the map of the new scope: this is not evidence of map isolation,
 // which is checked below with information pages
-check('product links of other scopes load no persistent map', array_keys($r->get('cache')->d), ['seo_pro.0.1']);
+check('product links of other scopes load no persistent map', array_keys($r->get('cache')->d), map_keys(0, 1));
 
 echo "\n-- persistent map isolation by store and language (information/information, native route)\n";
+// The keys of the map of a scope: its queries, then the groups of its keywords
+function map_keys($s, $l) { $k = [Seo_pro_cache::mapKey($s, $l)]; for ($g = 0; $g < Seo_pro_cache::KEYWORD_GROUPS; $g++) $k[] = sprintf('%s.k.%02d', $k[0], $g); return $k; }
+// Every keyword stored in the groups of a scope
+function map_keywords($cache, $s, $l) { $all = []; foreach (array_slice(map_keys($s, $l), 1) as $k) $all += $cache->d[$k]['keywords'] ?? []; return $all; }
 // The regression as [name, got, expected] rows, so that the negative probe can run it with a cache that shares one key
 function map_isolation($cache) {
 	$scopes = [[0, 1], [1, 1], [0, 2], [1, 2]]; $out = [];
@@ -180,16 +185,17 @@ function map_isolation($cache) {
 			$key = "seo_pro.$s.$l"; $cache->gets = []; $cache->sets = [];
 			[$r, $c] = $scope($s, $l);
 			$out[] = ["$phase $key: href of its own alias", $link($s, $l, $r), "http://shop.test/info-s$s-l$l.html"];
-			$out[] = ["$phase $key: cache get and set keys", [$cache->gets, $cache->sets], [[$key], $sets ? [$key] : []]];
+			$out[] = ["$phase $key: cache get and set keys", [$cache->gets, $cache->sets], [[$key], $sets ? map_keys($s, $l) : []]];
 			$out[] = ["$phase $key: full map SELECTs, MAX checks counted separately, no other SQL", [sql($r, 'map'), sql($r, 'max'), sql($r, 'all')], [$maps, 1, $maps + 1]];
 			$out[] = ["$phase $key: no core rewrite, the router of the core is never asked", [sql($r, 'core'), prop($c, 'core'), prop($c, 'core_links')], [0, false, []]];
 		}
 		if ($phase === 'cold') {
 			$keys = array_keys($cache->d); sort($keys);
-			$out[] = ['cold: exactly the four persisted keys', $keys, ['seo_pro.0.1', 'seo_pro.0.2', 'seo_pro.1.1', 'seo_pro.1.2']];
+			$exp = array_merge(map_keys(0, 1), map_keys(0, 2), map_keys(1, 1), map_keys(1, 2)); sort($exp);
+			$out[] = ['cold: exactly the persisted keys of the four maps', $keys, $exp];
 			foreach ($scopes as [$s, $l]) {
 				$map = $cache->d["seo_pro.$s.$l"] ?? [];
-				$out[] = ["cold seo_pro.$s.$l: stored map of its scope", [$map['queries']['information_id=4'] ?? null, $map['keywords']["info-s$s-l$l"] ?? null, count($map['keywords'] ?? []), $map['foreign'] ?? null, $map['max_id'] ?? null], ["info-s$s-l$l", 'information_id=4', 1, false, 4]];
+				$out[] = ["cold seo_pro.$s.$l: stored map of its scope", [$map['queries']['information_id=4'] ?? null, map_keywords($cache, $s, $l)["info-s$s-l$l"] ?? null, count(map_keywords($cache, $s, $l)), $map['foreign'] ?? null, $map['max_id'] ?? null], ["info-s$s-l$l", 'information_id=4', 1, false, 4]];
 			}
 		}
 	}
@@ -355,6 +361,28 @@ $o = warm(); $map = $o['cache']->d['seo_pro.0.1']; unset($map['max_id']); $o['ca
 check('a map cached by an older version is built again', [$x['route'] ?? $x, sql($r, 'map'), isset($o['cache']->d['seo_pro.0.1']['max_id'])], ['product/category', 1, true]);
 [$x, $r] = run('/moto/', 'GET', $o);
 check('unchanged table: the map is not built again', [sql($r, 'map'), sql($r, 'max'), sql($r, 'verify')], [0, 1, 1]);
+
+echo "\n-- the keywords of the map are read by groups\n";
+$o = warm(); $o['cache']->gets = [];
+[$x, $r] = run('/moto/enduro/tyre.html', 'GET', $o);
+$read = array_values(array_unique(preg_grep('~^seo_pro\.0\.1\.k\.~', $o['cache']->gets)));
+$need = array_values(array_unique(array_map(fn($k) => Seo_pro_cache::keywordKey(0, 1, $k), ['moto', 'enduro', 'tyre']))); sort($read); sort($need);
+check('a warm request reads only the groups of the keywords of its address', [$x['route'] ?? $x, $read, sql($r, 'map')], ['product/product', $need, 0]);
+check('every group carries the gen of its map', count(array_filter(map_keys(0, 1), fn($k) => $k === 'seo_pro.0.1' || ($o['cache']->d[$k]['gen'] ?? null) === $o['cache']->d['seo_pro.0.1']['gen'])), 1 + Seo_pro_cache::KEYWORD_GROUPS);
+$o = warm(); $k = Seo_pro_cache::keywordKey(0, 1, 'moto'); $o['cache']->d[$k]['gen'] = 'other';
+[$x, $r] = run('/moto/', 'GET', $o);
+check('a group of another build of the map: the map is built again once', [$x['route'] ?? $x, sql($r, 'map'), $o['cache']->d[$k]['gen'] === $o['cache']->d['seo_pro.0.1']['gen']], ['product/category', 1, true]);
+$o = warm(); unset($o['cache']->d[Seo_pro_cache::keywordKey(0, 1, 'moto')]);
+[$x, $r] = run('/moto/', 'GET', $o);
+check('a missing group (evicted, expired): the map is built again once', [$x['route'] ?? $x, sql($r, 'map'), isset($o['cache']->d[Seo_pro_cache::keywordKey(0, 1, 'moto')])], ['product/category', 1, true]);
+$o = warm(); $map = $o['cache']->d['seo_pro.0.1']; $o['cache']->d['seo_pro.0.1'] = ['max_id' => $map['max_id'], 'foreign' => false, 'keywords' => map_keywords($o['cache'], 0, 1), 'queries' => $map['queries']];
+[$x, $r] = run('/moto/', 'GET', $o);
+check('a map of 1.8 (every keyword under one key) is built again', [$x['route'] ?? $x, sql($r, 'map'), isset($o['cache']->d['seo_pro.0.1']['gen']), isset($o['cache']->d['seo_pro.0.1']['keywords'])], ['product/category', 1, true, false]);
+[$x, $r] = run('/moto/', 'GET', $o);
+check('after the rebuild of a group: no further build', sql($r, 'map'), 0);
+$o = warm(); $o['cache']->gets = [];
+$r = run('/', 'GET', $o)[1]; $r->get('url')->link('product/category', 'path=10'); $r->get('url')->link('information/information', 'information_id=4');
+check('links of categories and pages read the map, not the groups of keywords', [count(preg_grep('~^seo_pro\.0\.1\.k\.~', $o['cache']->gets)), in_array('seo_pro.0.1', $o['cache']->gets, true)], [0, true]);
 
 echo "\nnotices: {$GLOBALS['notices']}, failed: $fail\n";
 if ($fail > 0 || $GLOBALS['notices'] > 0) http_response_code(500);

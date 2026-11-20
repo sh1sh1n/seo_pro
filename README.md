@@ -95,7 +95,8 @@ php tests/audit_seo_url.php /path/to/shop/config.php
 ```
 
 ### Caches
-- The map of keywords is cached per store and language under the key `seo_pro.<store_id>.<language_id>`; the category paths of category links are cached in 32 groups under the keys `seo_pro.path.c.00` to `seo_pro.path.c.31`.
+- The map of keywords is cached per store and language. The key `seo_pro.<store_id>.<language_id>` holds the queries of categories, manufacturers, information pages and routes; the keywords are split by `crc32` into 64 groups `seo_pro.<store_id>.<language_id>.k.00` to `.k.63`. A request reads the map and only the groups of the keywords of its address, so its cost does not grow with the number of products. Product links are built from their own records and do not use the map. A group that is missing or belongs to another build of the map makes the request build the whole map again.
+- The category paths of category links are cached in 32 groups under the keys `seo_pro.path.c.00` to `seo_pro.path.c.31`.
 - Every module key is deleted by its exact name after a product, category, manufacturer or information page is saved through the admin models, after a change in Design → SEO URL and after Repair in Catalog → Categories.
 - Records written to `seo_url` past these models (an import, another extension, SQL):
   - A new record is seen by the next request: the cached map stores `MAX(seo_url_id)` and is rebuilt when it changes. This costs one query per request.
@@ -112,7 +113,7 @@ Import tools that write directly to the database do not clear the module caches.
 - HTML H1 and descriptions are not added to the records of other extensions (for example blogs).
 
 ## Upgrading
-- To 1.8 from 1.7.x: install the new archive, press Refresh and reset OPcache when `opcache.validate_timestamps=0`. The schema version stays `1.7`, so no migration runs. Cached keyword maps of older versions are rebuilt by the first request.
+- To 1.8 from 1.7.x: install the new archive, press Refresh and reset OPcache when `opcache.validate_timestamps=0`. The schema version stays `1.7`, so no migration runs. Cached keyword maps of older versions, including the single-key map of earlier 1.8 builds, are rebuilt by the first request.
 - From 1.6: the old file `catalog/controller/startup/seo_pro.php` is no longer used and can be deleted.
 - Shops with records of other extensions in `seo_url` change their addresses with 1.8 when the core router is modified to read those records: see [Records of other extensions](#records-of-other-extensions). Run `tests/audit_seo_url.php` before the upgrade to list them.
 

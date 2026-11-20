@@ -24,6 +24,23 @@ class Seo_pro_cache {
 		return sprintf('seo_pro.path.%s.%02d', $type, $id % self::PATH_GROUPS);
 	}
 
+	/**
+	 * Number of groups of the keywords of a map. The map of a store and a language keeps its queries under
+	 * mapKey($store_id, $language_id) and its keywords in the groups keywordKey(), by crc32 of the keyword:
+	 * a request reads only the groups of the keywords of its address, not every keyword of the store.
+	 * clear() deletes the groups by name: change it only together with a reset of the whole cache.
+	 */
+	const KEYWORD_GROUPS = 64;
+
+	public static function mapKey(int $store_id, int $language_id): string {
+		return 'seo_pro.' . $store_id . '.' . $language_id;
+	}
+
+	// Lowercase keyword of the map; two digits, so the file cache does not delete group 1 with group 10
+	public static function keywordKey(int $store_id, int $language_id, string $keyword): string {
+		return sprintf('%s.k.%02d', self::mapKey($store_id, $language_id), crc32($keyword) % self::KEYWORD_GROUPS);
+	}
+
 	public static function clear($db, $cache): void {
 		// Keys of 1.7 and older
 		$cache->delete('product.seopath');
@@ -47,7 +64,11 @@ class Seo_pro_cache {
 
 		foreach ($store_ids as $store_id) {
 			foreach ($languages as $language) {
-				$cache->delete('seo_pro.' . $store_id . '.' . (int)$language['language_id']);
+				$cache->delete(self::mapKey($store_id, (int)$language['language_id']));
+
+				for ($group = 0; $group < self::KEYWORD_GROUPS; $group++) {
+					$cache->delete(sprintf('%s.k.%02d', self::mapKey($store_id, (int)$language['language_id']), $group));
+				}
 			}
 		}
 	}

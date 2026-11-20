@@ -17,7 +17,7 @@ class DB { public $log = [];
 		if (strpos($sql, 'SELECT language_id FROM `oc_language`') === 0) return new Res([['language_id' => 1], ['language_id' => 2]]);
 		return new Res(); } }
 // Every key the module writes: the maps of each store and language, the groups of paths, the keys of 1.7 and older
-function module_keys() { $k = ['product.seopath', 'category.seopath']; for ($g = 0; $g < 32; $g++) { $k[] = sprintf('seo_pro.path.p.%02d', $g); $k[] = sprintf('seo_pro.path.c.%02d', $g); } foreach ([0, 1, 2] as $s) foreach ([1, 2] as $l) $k[] = "seo_pro.$s.$l"; return $k; }
+function module_keys() { $k = ['product.seopath', 'category.seopath']; for ($g = 0; $g < 32; $g++) { $k[] = sprintf('seo_pro.path.p.%02d', $g); $k[] = sprintf('seo_pro.path.c.%02d', $g); } foreach ([0, 1, 2] as $s) foreach ([1, 2] as $l) { $k[] = "seo_pro.$s.$l"; for ($g = 0; $g < 64; $g++) $k[] = sprintf('seo_pro.%d.%d.k.%02d', $s, $l, $g); } return $k; }
 class ExactCache { public $d = []; public $del = [];
 	function get($k) { return $this->d[$k] ?? null; } function set($k, $v) { $this->d[$k] = $v; } function delete($k) { $this->del[] = $k; unset($this->d[$k]); }
 	function warm() { $this->d = array_fill_keys(module_keys(), 1) + ['other' => 1]; }
@@ -40,6 +40,8 @@ echo "-- F05: Seo_pro_cache::clear on an exact-key cache\n";
 $r = reg(); Seo_pro_cache::clear($r->get('db'), $r->get('cache'));
 check('only foreign keys left', $r->get('cache')->left(), 'other');
 check('32 groups of paths', Seo_pro_cache::PATH_GROUPS, 32);
+check('64 groups of keywords of a map', Seo_pro_cache::KEYWORD_GROUPS, 64);
+check('the key of a group of keywords is the one the controller reads', [Seo_pro_cache::keywordKey(0, 1, 'moto'), Seo_pro_cache::keywordKey(2, 3, 'moto')], [sprintf('seo_pro.0.1.k.%02d', crc32('moto') % 64), sprintf('seo_pro.2.3.k.%02d', crc32('moto') % 64)]);
 $del = $r->get('cache')->del;
 check('each group of products and of categories deleted by its name', array_values(array_intersect(module_keys(), $del)), module_keys());
 check('groups 00..31 of both kinds, nothing else under seo_pro.path', count(preg_grep('~^seo_pro\.path\.[pc]\.(0\d|1\d|2\d|3[01])$~', $del)) === 64 && count(preg_grep('~^seo_pro\.path\.~', $del)) === 64, true);

@@ -1,6 +1,10 @@
 <?php
 class ControllerExtensionStartupSeoPro extends Controller {
+	// The map of the current store and language: max_id, foreign, gen and the queries; the keywords are in $keyword_groups
 	private $cache_data = null;
+
+	// Groups of the keywords of the map read in this request, by group key
+	private $keyword_groups = array();
 
 	private $cache_store_id = null;
 
@@ -362,12 +366,14 @@ class ControllerExtensionStartupSeoPro extends Controller {
 	private function getQueryByKeyword($keyword, $other_languages = false) {
 		$keyword = (string)$keyword;
 
-		if (isset($this->cache_data['keywords'][$keyword])) {
+		$known = $this->mapKeyword($keyword);
+
+		if ($known !== null) {
 			if ($this->hits !== null) {
 				$this->hits[] = $keyword;
 			}
 
-			return (string)$this->cache_data['keywords'][$keyword];
+			return $known;
 		}
 
 		if (!$other_languages) {
@@ -383,7 +389,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		// A record of the current language that the map does not have, or has with another query.
 		// The record is compared, not the address: the database may find "café" for "cafe", and the map has "café"
 		if ((int)$query->row['language_id'] === $this->cache_language_id) {
-			$known = $this->cache_data['keywords'][$query->row['keyword']] ?? null;
+			$known = $this->mapKeyword((string)$query->row['keyword']);
 
 			if ($known === null || (string)$known !== (string)$query->row['query']) {
 				$this->stale = true;
@@ -424,7 +430,7 @@ class ControllerExtensionStartupSeoPro extends Controller {
 
 			$found[$row['keyword']] = true;
 
-			if (!isset($this->cache_data['keywords'][$row['keyword']]) || (string)$this->cache_data['keywords'][$row['keyword']] !== (string)$row['query']) {
+			if ($this->mapKeyword((string)$row['keyword']) !== (string)$row['query']) {
 				return false;
 			}
 		}
@@ -769,16 +775,23 @@ class ControllerExtensionStartupSeoPro extends Controller {
 		$this->cache_store_id = $store_id;
 		$this->cache_language_id = $language_id;
 
-		$cache_key = 'seo_pro.' . $store_id . '.' . $language_id;
+		$cache_key = Seo_pro_cache::mapKey($store_id, $language_id);
+
+		$this->keyword_groups = array();
 
 		$cache_data = $rebuild ? null : $this->cache->get($cache_key);
 
 		// A record added past the models of the core (an import, another extension) changes MAX(seo_url_id)
-		// A map of 1.7.2 does not say whether the store has records of other extensions
-		if (!is_array($cache_data) || !isset($cache_data['max_id']) || !isset($cache_data['foreign']) || (int)$cache_data['max_id'] !== $this->max_id) {
+		// A map of 1.8 and older keeps every keyword under one key and has no gen: it is built again
+		if (!is_array($cache_data) || !isset($cache_data['max_id']) || !isset($cache_data['foreign']) || !isset($cache_data['gen']) || !isset($cache_data['queries']) || (int)$cache_data['max_id'] !== $this->max_id) {
 			$query = $this->db->query("SELECT LOWER(`keyword`) AS 'keyword', `query` FROM " . DB_PREFIX . "seo_url WHERE store_id = '" . $store_id . "' AND language_id = '" . $language_id . "' ORDER BY seo_url_id");
 
-			$cache_data = array('max_id' => $this->max_id, 'foreign' => false, 'keywords' => array(), 'queries' => array());
+			// The groups of keywords carry the gen of their map: a group of another build is not used
+			$gen = $this->max_id . '.' . bin2hex(random_bytes(6));
+
+			$cache_data = array('max_id' => $this->max_id, 'foreign' => false, 'gen' => $gen, 'queries' => array());
+
+			$keywords = array();
 
 			foreach ($query->rows as $row) {
 				if (!$cache_data['foreign'] && $this->isForeign((string)$row['query'])) {
@@ -786,18 +799,60 @@ class ControllerExtensionStartupSeoPro extends Controller {
 				}
 
 				// The keyword already belongs to an earlier query: this query keeps a plain link
-				if (isset($cache_data['keywords'][$row['keyword']])) {
+				if (isset($keywords[$row['keyword']])) {
 					continue;
 				}
 
-				$cache_data['keywords'][$row['keyword']] = $row['query'];
-				$cache_data['queries'][$row['query']] = $row['keyword'];
+				$keywords[$row['keyword']] = $row['query'];
+
+				// Links of products are built from their own query (buildProductBaseAddress), not from the map
+				if (strncmp((string)$row['query'], 'product_id=', 11) !== 0) {
+					$cache_data['queries'][$row['query']] = $row['keyword'];
+				}
 			}
 
+			$groups = array();
+
+			foreach ($keywords as $keyword => $keyword_query) {
+				$groups[Seo_pro_cache::keywordKey($store_id, $language_id, (string)$keyword)][$keyword] = $keyword_query;
+			}
+
+			// The file cache deletes the groups together with the map: the map is written first
 			$this->cache->set($cache_key, $cache_data);
+
+			for ($group = 0; $group < Seo_pro_cache::KEYWORD_GROUPS; $group++) {
+				$key = sprintf('%s.k.%02d', $cache_key, $group);
+
+				$this->keyword_groups[$key] = $groups[$key] ?? array();
+
+				$this->cache->set($key, array('gen' => $gen, 'keywords' => $this->keyword_groups[$key]));
+			}
 		}
 
 		$this->cache_data = $cache_data;
+	}
+
+	/**
+	 * Keyword -> query from the map of the current store and language. Reads the group of the keyword once per request;
+	 * a group that is missing or belongs to another build of the map makes the map be built again.
+	 *
+	 * @return string|null
+	 */
+	private function mapKeyword($keyword) {
+		$key = Seo_pro_cache::keywordKey((int)$this->cache_store_id, (int)$this->cache_language_id, (string)$keyword);
+
+		if (!isset($this->keyword_groups[$key])) {
+			$group = $this->cache->get($key);
+
+			if (!is_array($group) || !isset($group['gen'], $group['keywords']) || !is_array($group['keywords']) || $group['gen'] !== $this->cache_data['gen']) {
+				// Built from the table: every group is then in memory
+				$this->loadCache(true);
+			} else {
+				$this->keyword_groups[$key] = $group['keywords'];
+			}
+		}
+
+		return isset($this->keyword_groups[$key][$keyword]) ? (string)$this->keyword_groups[$key][$keyword] : null;
 	}
 
 	private $product_addresses = array();
